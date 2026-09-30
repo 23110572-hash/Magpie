@@ -1,0 +1,44 @@
+# Render Blueprint for the Magpie FastAPI backend (Dashboard -> New -> Blueprint -> this repo).
+# `sync: false` values are asked for on first deploy - paste them from backend/.env. Never commit secrets.
+services:
+  - type: web
+    name: magpie-backend
+    runtime: python
+    plan: free
+    region: ohio            # close to the Neon us-east-2 database
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: DATABASE_URL            # Neon connection string
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS            # your Vercel URL, e.g. https://magpie.vercel.app
+        sync: false
+      - key: CORS_ORIGIN_REGEX       # optional, for preview URLs: ^https://magpie-[a-z0-9-]+\.vercel\.app$
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: meta-llama/llama-3.3-70b-instruct
+      - key: OPENROUTER_PROVIDER_SORT
+        value: throughput
+      - key: SERPER_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: EMAIL_RELAY_URL         # https://<your-vercel-app>.vercel.app/api/send-email
+        sync: false
+      - key: EMAIL_RELAY_SECRET      # same value as EMAIL_RELAY_SECRET in Vercel
+        sync: false
