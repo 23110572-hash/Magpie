@@ -3,6 +3,15 @@
 An AI-powered data intelligence platform that turns a plain-language business requirement into a clean,
 structured, source-backed dataset, through a workflow the AI designs and runs on its own.
 
+| | Link |
+| --- | --- |
+| **Live app** | [magpie-lake-iota.vercel.app](https://magpie-lake-iota.vercel.app/) |
+| **Backend (health check)** | [magpie-9pln.onrender.com](https://magpie-9pln.onrender.com) |
+| **Source code** | [github.com/23110572-hash/Magpie](https://github.com/23110572-hash/Magpie) |
+
+> The backend runs on a free plan and sleeps when idle: the first request after a quiet period can take about
+> a minute while it wakes up.
+
 ---
 
 ## 1. Problem statement

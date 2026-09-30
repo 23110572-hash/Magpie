@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Layers, ShieldCheck, Sparkles, Wand2 } from "lucide-react";
 import { GridPattern } from "@/components/ui/grid-pattern";
 import PromptBar from "@/components/ui/prompt-bar";
-import { BrandCorner, FloatingNav, UserMenu } from "@/components/FloatingNav";
+import { BrandCorner, FloatingNav } from "@/components/FloatingNav";
 import { ProcessingTracker } from "@/components/ProcessingTracker";
 import { DatasetsView } from "@/components/DatasetsView";
 import { LeadsView, type OutreachTemplate } from "@/components/LeadsView";
@@ -11,7 +11,9 @@ import { SettingsView } from "@/components/SettingsView";
 import { Toasts, type Toast } from "@/components/Toasts";
 import { API_BASE, ApiError, api, downloadFile, sleep, streamEvents } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { Country, DatasetDetail, DatasetSummary, Intent, Lead, Mode, SystemStatus, Tab, User, WorkflowRun } from "@/types";
+import type {
+  Country, DatasetDetail, DatasetSummary, Intent, Lead, Mode, PendingAction, SystemStatus, Tab, User, WorkflowRun,
+} from "@/types";
 import { isTerminal } from "@/types";
 
 /** Prefer the most advanced state; once both are final, the persisted row wins. */
@@ -26,13 +28,20 @@ function pickRun(live?: WorkflowRun, polled?: WorkflowRun): WorkflowRun | undefi
 }
 
 interface WorkspaceProps {
-  user: User;
+  user: User | null; // null = guest: only Home is usable, everything else asks to sign in
+  authLoading: boolean;
+  onRequireAuth: (action: PendingAction) => void;
+  pending: PendingAction | null; // what the user tried to do before signing in
+  onPendingConsumed: () => void;
   onUserChange: (user: User) => void;
   onSignOut: () => void;
 }
 
-export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
-  const [tab, setTab] = useState<Tab>("home");
+export function Workspace({
+  user, authLoading, onRequireAuth, pending, onPendingConsumed, onUserChange, onSignOut,
+}: WorkspaceProps) {
+  const signedIn = !!user;
+  const [tab, setTab] = useState<Tab>(() => (user && pending?.tab) || "home");
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [offline, setOffline] = useState<string | null>(null);
 
@@ -62,7 +71,7 @@ export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
     if (err instanceof ApiError && err.status === 0) setOffline(err.message);
   }, []);
   const fail = useCallback((err: unknown, fallback = "Something went wrong") => {
-    if (err instanceof ApiError && err.status === 401) return; // App shows the sign-in page
+    if (err instanceof ApiError && err.status === 401) return; // App switches back to guest mode
     quiet(err);
     notify("error", err instanceof Error ? err.message : fallback);
   }, [notify, quiet]);
@@ -76,31 +85,42 @@ export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
   const refreshLeads = useCallback(() => api<Lead[]>("/api/leads").then(setLeads).catch(quiet), [quiet]);
   const refreshStatus = useCallback(() => api<SystemStatus>("/api/status").then(setStatus).catch(quiet), [quiet]);
 
+  // Guests have no data: nothing below talks to the API until the visitor signs in.
   useEffect(() => {
+    if (!signedIn) return;
     void refreshRuns();
     void refreshLeads();
     void refreshStatus();
-  }, [refreshRuns, refreshLeads, refreshStatus]);
+  }, [signedIn, refreshRuns, refreshLeads, refreshStatus]);
 
   const mergedRuns = useMemo(() => runs.map((r) => pickRun(liveRuns[r.id], r) as WorkflowRun), [runs, liveRuns]);
   const runningRuns = mergedRuns.filter((r) => !isTerminal(r.status));
   const anyRunning = runningRuns.length > 0;
 
   useEffect(() => {
+    if (!signedIn) return;
     const id = window.setInterval(() => void refreshRuns(), anyRunning ? 3000 : 15000);
     return () => window.clearInterval(id);
-  }, [anyRunning, refreshRuns]);
+  }, [signedIn, anyRunning, refreshRuns]);
 
   const completedSignature = runs.filter((r) => r.status === "completed").map((r) => r.id).join(",");
   useEffect(() => {
+    if (!signedIn) return;
     void refreshDatasets();
-  }, [completedSignature, refreshDatasets]);
+  }, [signedIn, completedSignature, refreshDatasets]);
 
   useEffect(() => {
+    if (!signedIn) return;
     if (tab === "leads") void refreshLeads();
     if (tab === "datasets") void refreshDatasets();
     if (tab === "settings") void refreshStatus();
-  }, [tab, refreshLeads, refreshDatasets, refreshStatus]);
+  }, [signedIn, tab, refreshLeads, refreshDatasets, refreshStatus]);
+
+  /** Every tab except Home needs an account. */
+  const goTab = useCallback((next: Tab) => {
+    if (!signedIn && next !== "home") onRequireAuth({ tab: next });
+    else setTab(next);
+  }, [signedIn, onRequireAuth]);
 
   // ------------------------------------------------------------ live progress (fetch-based SSE with auth header)
   const trackedRun = useMemo(() => {
@@ -165,18 +185,33 @@ export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
   }, []);
 
   // ------------------------------------------------------------ actions
-  const startRun = async (prompt: string, mode: Mode, country: Country) => {
+  const startRun = useCallback(async (prompt: string, mode: Mode, country: Country) => {
+    if (!signedIn) {
+      onRequireAuth({ run: { prompt, mode, country } }); // runs automatically after sign-in
+      return;
+    }
     setSubmitting(true);
     try {
       const run = await api<WorkflowRun>("/api/runs", { method: "POST", json: { prompt, mode, country } });
       setRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
       setTrackedRunId(run.id);
+      setTab("home");
     } catch (err) {
       fail(err, "Could not start the workflow");
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [signedIn, onRequireAuth, fail]);
+
+  // Carry out what the visitor tried to do before signing in (the tab was restored in useState).
+  useEffect(() => {
+    if (!signedIn || !pending) return;
+    const timer = window.setTimeout(() => {
+      onPendingConsumed();
+      if (pending.run) void startRun(pending.run.prompt, pending.run.mode, pending.run.country);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [signedIn, pending, onPendingConsumed, startRun]);
 
   const cancelRun = async (runId: string) => {
     try {
@@ -311,12 +346,13 @@ export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
   return (
     <div className="relative min-h-screen bg-[#f8fafc] text-slate-900 selection:bg-blue-600 selection:text-white">
       <BrandCorner onClick={() => setTab("home")} />
-      <UserMenu user={user} onSettings={() => setTab("settings")} onSignOut={onSignOut} />
-      <FloatingNav activeTab={tab} setActiveTab={setTab} runningCount={runningRuns.length}
+      <FloatingNav activeTab={tab} onTab={goTab} runningCount={runningRuns.length}
         onRunningClick={() => {
           if (runningRuns[0]) setTrackedRunId(runningRuns[0].id);
           setTab("home");
-        }} />
+        }}
+        user={user} authLoading={authLoading} onSignIn={() => onRequireAuth({})}
+        onSettings={() => setTab("settings")} onSignOut={onSignOut} />
 
       <main className="pt-20 lg:pt-28 pb-28 lg:pb-12 print:pt-0 print:pb-0">
         {offline && (
@@ -338,7 +374,8 @@ export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
             </div>
             <div className="relative z-10 text-center max-w-3xl mx-auto mb-8">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-50 border border-blue-200 text-sm font-semibold text-blue-700 mb-5">
-                <Sparkles className="w-4 h-4" /> Hi {user.name.split(" ")[0]}, what should Magpie collect?
+                <Sparkles className="w-4 h-4" />
+                {user ? `Hi ${user.name.split(" ")[0]}, what should Magpie collect?` : "AI-powered data intelligence"}
               </div>
               <h1 className="text-4xl sm:text-6xl font-black text-slate-900 tracking-tight leading-[1.1] mb-5">
                 You ask. <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-transparent">It collects.</span>
@@ -350,6 +387,15 @@ export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
             </div>
             <div className="relative z-20 w-full flex flex-col items-center">
               <PromptBar onSubmit={startRun} isLoading={submitting} />
+              {!user && !authLoading && (
+                <p className="mt-4 text-sm text-slate-600 text-center">
+                  Type your request and press enter - you'll be asked to{" "}
+                  <button type="button" onClick={() => onRequireAuth({})} className="font-semibold text-blue-700 hover:underline">
+                    sign in or create a free account
+                  </button>{" "}
+                  first, then it starts automatically.
+                </p>
+              )}
               <ProcessingTracker run={trackedRun} onViewDataset={openDataset} onCancel={cancelRun} onRerun={rerun} />
             </div>
             <div className="relative z-10 grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-5xl w-full mt-14 text-left">
@@ -383,7 +429,7 @@ export function Workspace({ user, onUserChange, onSignOut }: WorkspaceProps) {
             onViewDataset={openDataset} onRerun={(id) => rerun(id)} onCancel={cancelRun} onDelete={deleteRun}
             onGoHome={() => setTab("home")} />
         )}
-        {tab === "settings" && (
+        {tab === "settings" && user && (
           <SettingsView user={user} status={status} onUserChange={onUserChange} onSignedOut={onSignOut} notify={notify} />
         )}
       </main>

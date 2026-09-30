@@ -192,5 +192,11 @@ export interface SystemStatus {
 export const TERMINAL_STATUSES = ["completed", "failed", "cancelled"];
 export const isTerminal = (status?: string | null) => !!status && TERMINAL_STATUSES.includes(status);
 
+/** Something a guest tried to do; it is carried out right after they sign in. */
+export interface PendingAction {
+  run?: { prompt: string; mode: Mode; country: Country };
+  tab?: Tab;
+}
+
 export const placeText = (place?: Place | null) =>
   place ? [place.city, place.region, place.country].filter(Boolean).join(", ") : "";
