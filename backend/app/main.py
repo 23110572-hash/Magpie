@@ -431,6 +431,30 @@ def list_leads(user: CurrentUser = Depends(get_current_user), db: Session = Depe
     return db.query(LeadOutreach).filter(LeadOutreach.user_id == user.id).order_by(LeadOutreach.created_at.desc()).all()
 
 
+def _with_article(phrase: str) -> str:
+    return f"{'an' if phrase[:1].lower() in 'aeiou' else 'a'} {phrase}"
+
+
+def looking_for_text(dataset: Optional[Dataset], record_title: Optional[str]) -> Optional[str]:
+    """What the user is looking for, phrased to follow "Krishna is looking for ..." -
+    e.g. "a graphic designer in Noida" or "a React Developer opportunity"."""
+    if dataset is None:
+        return None
+    spec = (dataset.run.spec if dataset.run else None) or {}
+    if dataset.intent == "jobs":
+        role = (record_title or spec.get("entity") or "").strip()
+        return f"{_with_article(role)} opportunity" if role else None
+    entity = str(spec.get("entity") or "").strip()
+    if not entity or entity.lower() == "result":
+        return (dataset.label or "").strip() or None
+    place = dataset.place or spec.get("place") or {}
+    where = place.get("city") or place.get("region") or place.get("country")
+    text = _with_article(entity)
+    if where and place.get("scope") in ("city", "region", "country") and where.lower() not in entity.lower():
+        text += f" in {where}"
+    return text
+
+
 @app.post("/api/leads/from-records")
 def leads_from_records(req: LeadsFromRecordsRequest, user: CurrentUser = Depends(get_current_user),
                        db: Session = Depends(get_db)):
@@ -454,7 +478,8 @@ def leads_from_records(req: LeadsFromRecordsRequest, user: CurrentUser = Depends
                             contact_name=str(contact)[:300], email=record.email, phone=record.phone,
                             company=record.company or (record.title if dataset.intent != "jobs" else None),
                             role=str(role)[:300] if role else None, website=record.website,
-                            source_url=record.source_url, status="queued")
+                            source_url=record.source_url, status="queued",
+                            looking_for=looking_for_text(dataset, record.title))
         db.add(lead)
         created.append(lead)
     db.commit()
@@ -492,19 +517,25 @@ def delete_lead(lead_id: str, user: CurrentUser = Depends(get_current_user), db:
 
 @app.post("/api/leads/{lead_id}/send", response_model=LeadSchema)
 async def send_lead(lead_id: str, req: LeadSendRequest, user: CurrentUser = Depends(get_current_user)):
-    def load() -> LeadOutreach:
+    def load() -> tuple:
         with SessionLocal() as db:
-            return _own_lead(db, lead_id, user)
+            lead = _own_lead(db, lead_id, user)
+            looking_for = lead.looking_for
+            if not looking_for and lead.dataset_id:  # leads created before this field existed
+                record = db.get(DataRecord, lead.record_id) if lead.record_id else None
+                looking_for = looking_for_text(db.get(Dataset, lead.dataset_id), record.title if record else lead.role)
+            return lead, looking_for
 
-    lead = await asyncio.to_thread(load)
+    lead, looking_for = await asyncio.to_thread(load)
     if lead.status == "sent":
         raise HTTPException(status_code=409, detail="This lead was already e-mailed.")
     if not lead.email:
         raise HTTPException(status_code=400, detail="This lead has no e-mail address. Add one first.")
-    values = {"name": lead.contact_name, "company": lead.company, "role": lead.role}
+    values = {"name": lead.contact_name, "company": lead.company, "role": lead.role, "sender": user.name,
+              "sender_email": user.email, "looking_for": looking_for}
     subject = render_template(req.template_subject, **values)
     body = render_template(req.template_body, **values)
-    status, message_id, error = await deliver(lead.email, subject, with_footer(body, user.name), user.name, user.email)
+    status, message_id, error = await deliver(lead.email, subject, with_footer(body, user.name), user.email)
 
     def save() -> LeadOutreach:
         with SessionLocal() as db:
@@ -532,12 +563,16 @@ async def draft_template(req: DraftRequest, user: CurrentUser = Depends(get_curr
             return f"The contacts were collected for: {dataset.label or dataset.name}."
 
     about = await asyncio.to_thread(context)
-    goal = req.goal or "start a conversation about working together"
+    goal = req.goal or "connect with them"
     data = await chat_json(
-        "You write short, friendly, honest outreach e-mails. Return JSON {\"subject\": string, \"body\": string}. "
-        "Use the placeholders {name}, {company} and {role} where they fit. Max 110 words in the body, no fake claims, "
-        "no signature block (it is added automatically).",
-        f"Sender: {user.name}. Goal: {goal}. {about}", max_tokens=600, temperature=0.4, timeout=40)
+        "You write short, warm, honest outreach e-mails for Magpie, a platform that helps people find the right "
+        "professionals and businesses. The e-mail is sent BY Team Magpie TO someone we found, introducing a Magpie "
+        "user who wants to connect. Return JSON {\"subject\": string, \"body\": string}. The body must start with "
+        "'Hi {name},', say 'This is Team Magpie', explain that {sender} is looking for {looking_for} and what they "
+        "want, invite them to reach {sender} at {sender_email} or simply reply, and end with 'Best regards,\\nTeam "
+        "Magpie'. Keep these placeholders exactly as written: {name}, {sender}, {sender_email}, {looking_for}. "
+        "Max 110 words, no fake claims, no other signature.",
+        f"What the user wants: {goal}. {about}", max_tokens=600, temperature=0.4, timeout=40)
     if isinstance(data, dict) and data.get("subject") and data.get("body"):
         return {"subject": str(data["subject"])[:300], "body": str(data["body"])[:5000], "ai": True}
     return {"subject": DEFAULT_SUBJECT, "body": DEFAULT_BODY, "ai": False}

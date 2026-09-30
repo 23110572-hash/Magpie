@@ -110,6 +110,7 @@ class LeadOutreach(Base):
     status = Column(String(16), default="queued")  # queued, sent, simulated, failed
     template_subject = Column(Text, nullable=True)
     template_body = Column(Text, nullable=True)
+    looking_for = Column(Text, nullable=True)  # e.g. "a graphic designer in Noida" - fills {looking_for}
     last_error = Column(Text, nullable=True)
     message_id = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Building2, CheckSquare, Database, Download, ExternalLink, Eye, FileJson, FileText, Globe, LayoutGrid, Loader2,
-  Mail, MapPin, Phone, Plus, Search, Send, Square, Star, Table2, Trash2, X,
+  Mail, MapPin, Phone, Plus, Search, Send, Square, Table2, Trash2, X,
 } from "lucide-react";
 import type { Column, DataRecord, DatasetDetail, DatasetSummary } from "@/types";
 import { countryLabel, intentLabel, placeText } from "@/types";
@@ -13,7 +13,7 @@ interface DatasetsViewProps {
   selectedId: string | null;
   detail: DatasetDetail | null;
   loading: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string | null) => void;
   onAddLeads: (recordIds: string[]) => Promise<void>;
   onExport: (dataset: DatasetSummary, format: "csv" | "json") => void;
   onDelete: (dataset: DatasetSummary) => void;
@@ -29,8 +29,6 @@ const columnValue = (record: DataRecord, key: string): string => {
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
 };
-
-const pct = (part: number, total: number) => (total ? Math.round((part / total) * 100) : 0);
 
 export const DatasetsView: React.FC<DatasetsViewProps> = ({
   datasets, selectedId, detail, loading, onSelect, onAddLeads, onExport, onDelete, onGoHome,
@@ -53,7 +51,7 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
     [active, summaryColumns],
   );
 
-  const selectDataset = (id: string) => {
+  const selectDataset = (id: string | null) => {
     setQuery("");
     setSource("all");
     setNeedEmail(false);
@@ -80,13 +78,6 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
       return hay.includes(q);
     });
   }, [records, query, source, needEmail, needPhone, columns]);
-
-  const coverage = useMemo(() => ({
-    total: records.length,
-    email: records.filter((r) => r.email).length,
-    phone: records.filter((r) => r.phone).length,
-    website: records.filter((r) => r.website).length,
-  }), [records]);
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -134,42 +125,72 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
 
   return (
     <div className="w-full max-w-[1400px] mx-auto px-4 py-8">
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5 print:mb-2">
-        <div className="min-w-0">
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight">{summary?.label || summary?.name || "Datasets"}</h1>
-          {summary && (
+      <div className="mb-4 print:hidden">
+        <h1 className="text-3xl font-black text-slate-900 tracking-tight">Datasets</h1>
+        <p className="text-base text-slate-600 mt-1">
+          {datasets.length} {datasets.length === 1 ? "search" : "searches"} saved. Pick one to see its results.
+        </p>
+      </div>
+
+      {/* One card per search, in a horizontal bar */}
+      <div className="flex gap-3 overflow-x-auto snap-x pb-3 mb-6 -mx-1 px-1 print:hidden" role="tablist" aria-label="Your datasets">
+        {datasets.map((d) => {
+          const isActive = d.id === selectedId;
+          return (
+            <button key={d.id} type="button" role="tab" aria-selected={isActive}
+              onClick={() => selectDataset(isActive ? null : d.id)} title={formatDateTime(d.created_at)}
+              className={`snap-start shrink-0 w-72 text-left rounded-2xl border p-4 transition-all ${
+                isActive
+                  ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/25"
+                  : "bg-white border-slate-200 text-slate-900 shadow-sm hover:border-blue-300 hover:shadow-md"
+              }`}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className={`badge ${isActive ? "bg-white/15 border-white/30 text-white" : "bg-blue-50 text-blue-700 border-blue-200"}`}>
+                  {intentLabel(d.intent) || "Dataset"}
+                </span>
+                <span className={`text-xs ${isActive ? "text-blue-100" : "text-slate-500"}`}>{timeAgo(d.created_at)}</span>
+              </div>
+              <div className="text-base font-bold leading-snug line-clamp-2 min-h-[3rem]">{d.label || d.name}</div>
+              <div className={`mt-2 text-sm ${isActive ? "text-blue-100" : "text-slate-600"}`}>
+                {d.row_count} results · {d.coverage?.with_email ?? 0} e-mails · {d.coverage?.with_phone ?? 0} phones
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {!selectedId ? (
+        <div className="card p-10 text-center print:hidden">
+          <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 mx-auto mb-3">
+            <Database className="w-7 h-7" />
+          </div>
+          <p className="text-lg font-semibold text-slate-900">Select a dataset above to explore its results</p>
+          <p className="text-base text-slate-600 mt-1">You can search, filter, export and add people to outreach from there.</p>
+        </div>
+      ) : summary && (
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5 print:mb-2">
+          <div className="min-w-0">
+            <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">{summary.label || summary.name}</h2>
             <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-slate-600">
               {summary.intent && <span className="badge bg-blue-50 text-blue-700 border-blue-200">{intentLabel(summary.intent)}</span>}
               {summary.country && <span className="badge bg-slate-50 text-slate-700 border-slate-200">{countryLabel(summary.country)}</span>}
               {placeText(summary.place) && <span className="flex items-center gap-1"><MapPin className="w-4 h-4" />{placeText(summary.place)}</span>}
-              <span>· {summary.row_count} rows · {formatDateTime(summary.created_at)}</span>
+              <span>· {summary.row_count} results</span>
             </div>
-          )}
-        </div>
-        {summary && (
+          </div>
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <button type="button" onClick={() => onExport(summary, "csv")} className="btn-secondary"><Download className="w-4 h-4 text-emerald-600" /> CSV</button>
             <button type="button" onClick={() => onExport(summary, "json")} className="btn-secondary"><FileJson className="w-4 h-4 text-indigo-600" /> JSON</button>
             <button type="button" onClick={() => window.print()} disabled={!active} className="btn-secondary"><FileText className="w-4 h-4 text-blue-600" /> PDF</button>
             <button type="button" onClick={() => onDelete(summary)} className="btn-secondary"><Trash2 className="w-4 h-4 text-rose-500" /> Delete</button>
+            <button type="button" onClick={() => selectDataset(null)} className="btn-ghost" aria-label="Close this dataset">
+              <X className="w-5 h-5" />
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-4 print:hidden" role="tablist" aria-label="Datasets">
-        {datasets.map((d) => (
-          <button key={d.id} type="button" role="tab" aria-selected={d.id === selectedId} onClick={() => selectDataset(d.id)}
-            title={`${d.label || d.name} · ${formatDateTime(d.created_at)}`}
-            className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap flex items-center gap-2 max-w-[320px] ${
-              d.id === selectedId ? "bg-blue-600 text-white shadow-sm" : "bg-white text-slate-700 hover:bg-slate-50 border border-slate-200"
-            }`}>
-            <span className="truncate">{d.label || d.name}</span>
-            <span className={`text-xs px-2 rounded-full ${d.id === selectedId ? "bg-white/20" : "bg-slate-100 text-slate-600"}`}>{d.row_count}</span>
-          </button>
-        ))}
-      </div>
-
-      {loading && !active ? (
+      {!selectedId ? null : loading && !active ? (
         <div className="flex items-center justify-center gap-2 py-24 text-base text-slate-500"><Loader2 className="w-5 h-5 animate-spin" /> Loading rows…</div>
       ) : !active ? null : records.length === 0 ? (
         <div className="card p-10 text-center max-w-xl mx-auto my-8">
@@ -179,22 +200,6 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
         </div>
       ) : (
         <>
-          {/* Contact coverage */}
-          <div className="card p-4 sm:p-5 mb-5 print:hidden">
-            <p className="text-base text-slate-800">
-              Out of <strong>{coverage.total}</strong> rows, <strong>{coverage.email}</strong> have an e-mail ({pct(coverage.email, coverage.total)}%),{" "}
-              <strong>{coverage.phone}</strong> have a phone ({pct(coverage.phone, coverage.total)}%) and <strong>{coverage.website}</strong> have a website.
-            </p>
-            <div className="mt-3 grid grid-cols-3 gap-3">
-              {([["E-mail", coverage.email, "bg-emerald-500"], ["Phone", coverage.phone, "bg-blue-500"], ["Website", coverage.website, "bg-indigo-500"]] as const).map(([label, n, color]) => (
-                <div key={label}>
-                  <div className="flex justify-between text-xs text-slate-600 mb-1"><span>{label}</span><span>{pct(n, coverage.total)}%</span></div>
-                  <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${color}`} style={{ width: `${pct(n, coverage.total)}%` }} /></div>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {/* Toolbar */}
           <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 mb-4 print:hidden">
             <div className="flex flex-wrap gap-2 items-center">
@@ -235,9 +240,6 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
             <button type="button" disabled={!selected.size || adding} onClick={() => addLeads([...selected])} className="btn-success">
               {adding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Add selected to outreach ({selected.size})
             </button>
-            <button type="button" disabled={!coverage.email || adding} onClick={() => addLeads(records.filter((r) => r.email).map((r) => r.id))} className="btn-secondary">
-              <Mail className="w-4 h-4" /> Add all with e-mail ({coverage.email})
-            </button>
           </div>
 
           {view === "table" ? (
@@ -258,7 +260,6 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
                     <th className="p-3 font-semibold min-w-[150px]">Phone</th>
                     <th className="p-3 font-semibold">Website</th>
                     <th className="p-3 font-semibold">Source</th>
-                    <th className="p-3 font-semibold">Score</th>
                     <th className="p-3 sr-only">Actions</th>
                   </tr>
                 </thead>
@@ -286,7 +287,6 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
                         <td className="p-3 whitespace-nowrap">
                           {href ? <a className="text-slate-700 hover:text-blue-700 flex items-center gap-1" href={href} target="_blank" rel="noopener noreferrer">{r.source}<ExternalLink className="w-3.5 h-3.5" /></a> : r.source}
                         </td>
-                        <td className="p-3 font-semibold text-slate-800">{r.score != null ? Math.round(r.score) : "-"}</td>
                         <td className="p-3">
                           <button type="button" onClick={() => setInspecting(r)} className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100" aria-label={`Provenance of ${r.title}`}>
                             <Eye className="w-5 h-5" />
@@ -308,7 +308,6 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
                     <div>
                       <div className="flex items-center justify-between gap-2 mb-2">
                         <span className="badge bg-blue-50 text-blue-700 border-blue-200 truncate max-w-[60%]">{r.source}</span>
-                        {r.score != null && <span className="flex items-center gap-1 text-sm font-semibold text-amber-600"><Star className="w-4 h-4" />{Math.round(r.score)}</span>}
                       </div>
                       <h2 className="text-lg font-bold text-slate-900 line-clamp-2">{r.title}</h2>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600 mt-1.5">
@@ -411,7 +410,7 @@ const SnapshotModal: React.FC<{ record: DataRecord; onClose: () => void }> = ({ 
           <dt className="font-semibold text-slate-700">Source URL</dt>
           <dd>{href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline break-all">{href}</a> : "-"}</dd>
           <dt className="font-semibold text-slate-700">Collected</dt><dd>{formatDateTime(record.created_at)} ({timeAgo(record.created_at)})</dd>
-          {details.reason && (<><dt className="font-semibold text-slate-700">Why it matched</dt><dd>{String(details.reason)} (score {record.score != null ? Math.round(record.score) : "-"})</dd></>)}
+          {details.reason && (<><dt className="font-semibold text-slate-700">Why it matched</dt><dd>{String(details.reason)}</dd></>)}
           {details.contact_source && (<><dt className="font-semibold text-slate-700">Contact found on</dt><dd className="break-all">{String(details.contact_source)}</dd></>)}
           {!!details.also_seen_at?.length && (<><dt className="font-semibold text-slate-700">Also seen at</dt><dd className="break-all">{details.also_seen_at.join(" · ")}</dd></>)}
         </dl>

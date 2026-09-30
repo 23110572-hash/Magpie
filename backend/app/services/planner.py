@@ -54,6 +54,8 @@ Places named in the request are normally inside that market.
 Return ONLY a JSON object with these keys:
 - "corrected_prompt": the request rewritten as clear English (fix spelling, translate).
 - "understood_as": one short phrase for the dataset, e.g. "Web developers (people) in Chandigarh, India".
+- "results_phrase": plural phrase that completes the sentence "We have found 25 ...", e.g. "backend developers in
+    Odisha", "React JS jobs for freshers in Bangalore", "sponsors for college tech fests in Delhi".
 - "intent": one of people | jobs | companies | local_businesses | events | news | market | other.
     people = individual professionals / freelancers to contact or hire ("I need a designer" -> people).
     jobs = job openings / vacancies ("designer jobs", "hiring", "openings", "internships").
@@ -220,10 +222,16 @@ def _choose_sources(plan: Dict[str, Any], suggested: List[str], market_code: str
     plan["sources"], plan["skipped_sources"] = active, skipped
 
 
+def _phrase_from(understood: str) -> str:
+    """'Web developers in Chandigarh' -> 'web developers in Chandigarh' (keeps acronyms like 'AI startups')."""
+    return understood[0].lower() + understood[1:] if re.match(r"^[A-Z][a-z]+\b", understood) else understood
+
+
 def _fallback(prompt: str, market: Dict[str, Any], intent: str) -> Dict[str, Any]:
     """Used only when the LLM is unreachable: search the web for the user's own words."""
     return {
-        "corrected_prompt": prompt, "understood_as": prompt, "intent": intent, "alternatives": [],
+        "corrected_prompt": prompt, "understood_as": prompt, "results_phrase": f"results for “{prompt}”",
+        "intent": intent, "alternatives": [],
         "entity": "result", "match_terms": [],
         "place": {"city": None, "region": None, "country": market["country"], "country_code": market["code"],
                   "aliases": [], "scope": "country"},
@@ -247,9 +255,11 @@ def _normalize(raw: Dict[str, Any], prompt: str, market: Dict[str, Any], forced:
                 alternatives.append({"intent": alt_intent, "label": _s(alt.get("label"), 80) or alt_intent})
     queries = raw.get("queries") if isinstance(raw.get("queries"), dict) else {}
     place = _place(raw.get("place"), market)
+    understood = _s(raw.get("understood_as"), 200) or corrected
     return {
         "corrected_prompt": corrected,
-        "understood_as": _s(raw.get("understood_as"), 200) or corrected,
+        "understood_as": understood,
+        "results_phrase": _s(raw.get("results_phrase"), 160).rstrip(".") or _phrase_from(understood),
         "intent": intent,
         "alternatives": alternatives[:3],
         "entity": _s(raw.get("entity"), 80) or "result",

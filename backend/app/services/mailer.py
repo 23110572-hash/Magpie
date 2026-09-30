@@ -1,42 +1,49 @@
-"""Outreach e-mail: Vercel relay (production) -> direct Gmail SMTP (local) -> simulated."""
+"""Outreach e-mail from Team Magpie on behalf of a user: Vercel relay (production) -> Gmail SMTP (local) -> simulated."""
 import asyncio
 import re
 import smtplib
 import ssl
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import httpx
 
 from app.config import settings
 
-DEFAULT_SUBJECT = "Quick question for {name}"
-DEFAULT_BODY = ("Hi {name},\n\nI came across {company} while researching {role} and would love to connect.\n\n"
-                "Would you be open to a short chat this week?\n\nBest regards")
+FROM_NAME = "Team Magpie"
+DEFAULT_SUBJECT = "{sender} is looking for {looking_for}"
+DEFAULT_BODY = ("Hi {name},\n\n"
+                "This is Team Magpie. {sender} is looking for {looking_for} and would love to connect with you.\n\n"
+                "You can reach {sender} directly at {sender_email}, or simply reply to this e-mail.\n\n"
+                "Best regards,\nTeam Magpie")
+
+# Placeholder -> value used when the real value is missing.
+PLACEHOLDERS = {"name": "there", "company": "your team", "role": "this", "sender": "a Magpie user",
+                "sender_email": "the reply-to address of this e-mail", "looking_for": "someone with your skills"}
 
 
-def render_template(template: Optional[str], *, name: Optional[str], company: Optional[str], role: Optional[str]) -> str:
+def render_template(template: Optional[str], **values: Any) -> str:
     """Plain placeholder substitution (no str.format, so braces in user text are safe)."""
     text = template or ""
-    for key, value in (("{name}", name or "there"), ("{company}", company or "your team"), ("{role}", role or "this")):
-        text = text.replace(key, value)
+    for key, fallback in PLACEHOLDERS.items():
+        text = text.replace("{" + key + "}", str(values.get(key) or fallback))
     return text
+
+
+def with_footer(body: str, sender_name: str) -> str:
+    return (f"{body.rstrip()}\n\n--\nSent by Magpie on behalf of {sender_name}, who found your publicly listed details. "
+            "Not interested? Just reply \"unsubscribe\".")
 
 
 def _header_safe(value: str, limit: int) -> str:
     return re.sub(r"[\r\n\"<>]+", " ", value or "").strip()[:limit]
 
 
-def with_footer(body: str, sender_name: str) -> str:
-    return (f"{body.rstrip()}\n\n--\nSent by {sender_name} via Magpie. "
-            "If you'd rather not hear from me, just reply \"unsubscribe\".")
-
-
-async def deliver(to: str, subject: str, body: str, sender_name: str, reply_to: str) -> Tuple[str, Optional[str], Optional[str]]:
-    """Returns (status, message_id, error) with status in sent | simulated | failed."""
+async def deliver(to: str, subject: str, body: str, reply_to: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """Returns (status, message_id, error) with status in sent | simulated | failed. Replies go to the user."""
     subject = " ".join(subject.split())[:300]
-    from_name = _header_safe(f"{sender_name} via Magpie", 80)
+    from_name = _header_safe(FROM_NAME, 80)
     mode = settings.email_mode
     if mode == "relay":
         try:

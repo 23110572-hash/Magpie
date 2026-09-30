@@ -1,11 +1,10 @@
 import React, { useState } from "react";
-import { CheckCircle2, Loader2, LogOut, Save, ShieldAlert, XCircle } from "lucide-react";
+import { Loader2, LogOut, Save, ShieldAlert } from "lucide-react";
 import { api, setToken } from "@/lib/api";
-import type { SystemStatus, User } from "@/types";
+import type { User } from "@/types";
 
 interface SettingsViewProps {
   user: User;
-  status: SystemStatus | null;
   onUserChange: (user: User) => void;
   onSignedOut: () => void;
   notify: (kind: "success" | "error" | "info", text: string) => void;
@@ -13,7 +12,7 @@ interface SettingsViewProps {
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : "Something went wrong");
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ user, status, onUserChange, onSignedOut, notify }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ user, onUserChange, onSignedOut, notify }) => {
   const [name, setName] = useState(user.name);
   const [savingName, setSavingName] = useState(false);
   const [current, setCurrent] = useState("");
@@ -77,11 +76,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, status, onUser
     }
   };
 
-  const keyRows: [string, string][] = [
-    ["openrouter", "AI brain (OpenRouter)"], ["serper", "Google search & Maps (Serper)"], ["tavily", "Tavily search"],
-    ["adzuna", "Adzuna jobs"], ["github", "GitHub (higher limits)"],
-  ];
-
   return (
     <div className="w-full max-w-4xl mx-auto px-4 py-8 space-y-6">
       <div>
@@ -117,30 +111,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, status, onUser
           <button type="button" onClick={logoutAll} className="btn-secondary"><LogOut className="w-4 h-4" /> Sign out everywhere</button>
         </div>
       </form>
-
-      <section className="card p-6">
-        <h2 className="text-xl font-bold text-slate-900 mb-4">System status</h2>
-        {!status ? (
-          <p className="text-base text-slate-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</p>
-        ) : (
-          <div className="space-y-4">
-            <p className="text-base text-slate-700">AI model: <strong>{status.llm.enabled ? status.llm.model : "not configured"}</strong></p>
-            <ul className="grid sm:grid-cols-2 gap-2">
-              {keyRows.map(([key, label]) => (
-                <li key={key} className="flex items-center gap-2 text-base text-slate-700">
-                  {status.keys[key] ? <CheckCircle2 className="w-5 h-5 text-emerald-600" /> : <XCircle className="w-5 h-5 text-slate-400" />}
-                  {label}
-                </li>
-              ))}
-            </ul>
-            <p className="text-base text-slate-700">
-              Outreach e-mail:{" "}
-              <strong>{status.email.mode === "relay" ? "sent through the Vercel relay" : status.email.mode === "direct" ? "sent directly through Gmail" : "simulated (not configured)"}</strong>
-              {status.email.from && <> from {status.email.from}</>}, replies go to {status.email.reply_to}.
-            </p>
-          </div>
-        )}
-      </section>
 
       <form onSubmit={deleteAccount} className="card p-6 border-rose-200">
         <h2 className="text-xl font-bold text-rose-700 mb-2 flex items-center gap-2"><ShieldAlert className="w-5 h-5" /> Delete account</h2>

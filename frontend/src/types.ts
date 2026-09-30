@@ -55,6 +55,7 @@ export interface Coverage {
 export interface RunSpec {
   corrected_prompt?: string;
   understood_as?: string;
+  results_phrase?: string;
   intent?: Intent;
   alternatives?: { intent: Intent; label: string }[];
   entity?: string;
@@ -176,6 +177,7 @@ export interface Lead {
   status: string;
   template_subject?: string | null;
   template_body?: string | null;
+  looking_for?: string | null;
   last_error?: string | null;
   message_id?: string | null;
   created_at?: string | null;
@@ -191,6 +193,24 @@ export interface SystemStatus {
 
 export const TERMINAL_STATUSES = ["completed", "failed", "cancelled"];
 export const isTerminal = (status?: string | null) => !!status && TERMINAL_STATUSES.includes(status);
+
+export const resultCount = (run: WorkflowRun) => run.stats?.coverage?.total ?? run.stats?.deduplicated_count ?? 0;
+
+/** "backend developers in Odisha" - written by the AI; derived from "Understood as" for older runs. */
+function resultPhrase(spec?: RunSpec): string {
+  if (spec?.results_phrase) return spec.results_phrase;
+  const understood = spec?.understood_as?.trim();
+  if (!understood) return "results";
+  return /^[A-Z][a-z]+\b/.test(understood) ? understood.charAt(0).toLowerCase() + understood.slice(1) : understood;
+}
+
+/** The one line shown when a run finishes, e.g. "We have found 41 backend developers in Odisha." */
+export function resultSentence(run: WorkflowRun): string {
+  const n = resultCount(run);
+  if (!n) return "We couldn't find anything that matched well enough. Try Deep mode or describe it a little differently.";
+  if (n === 1) return `We have found 1 match for “${run.spec?.understood_as || run.prompt}”.`;
+  return `We have found ${n} ${resultPhrase(run.spec).replace(/\.$/, "")}.`;
+}
 
 /** Something a guest tried to do; it is carried out right after they sign in. */
 export interface PendingAction {

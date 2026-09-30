@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Layers, ShieldCheck, Sparkles, Wand2 } from "lucide-react";
-import { GridPattern } from "@/components/ui/grid-pattern";
+import { CloudBackground } from "@/components/ui/cloud-background";
 import PromptBar from "@/components/ui/prompt-bar";
 import { BrandCorner, FloatingNav } from "@/components/FloatingNav";
 import { ProcessingTracker } from "@/components/ProcessingTracker";
@@ -10,7 +10,6 @@ import { HistoryView } from "@/components/HistoryView";
 import { SettingsView } from "@/components/SettingsView";
 import { Toasts, type Toast } from "@/components/Toasts";
 import { API_BASE, ApiError, api, downloadFile, sleep, streamEvents } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import type {
   Country, DatasetDetail, DatasetSummary, Intent, Lead, Mode, PendingAction, SystemStatus, Tab, User, WorkflowRun,
 } from "@/types";
@@ -111,15 +110,21 @@ export function Workspace({
 
   useEffect(() => {
     if (!signedIn) return;
-    if (tab === "leads") void refreshLeads();
+    if (tab === "leads") {
+      void refreshLeads();
+      void refreshDatasets(); // the Leads page lists your searches
+    }
     if (tab === "datasets") void refreshDatasets();
-    if (tab === "settings") void refreshStatus();
-  }, [signedIn, tab, refreshLeads, refreshDatasets, refreshStatus]);
+  }, [signedIn, tab, refreshLeads, refreshDatasets]);
 
   /** Every tab except Home needs an account. */
   const goTab = useCallback((next: Tab) => {
-    if (!signedIn && next !== "home") onRequireAuth({ tab: next });
-    else setTab(next);
+    if (!signedIn && next !== "home") {
+      onRequireAuth({ tab: next });
+      return;
+    }
+    if (next === "datasets") setSelectedDatasetId(null); // the nav opens the list, not the last dataset
+    setTab(next);
   }, [signedIn, onRequireAuth]);
 
   // ------------------------------------------------------------ live progress (fetch-based SSE with auth header)
@@ -161,7 +166,8 @@ export function Workspace({
   }, [trackedRunId, trackedDone, refreshRuns]);
 
   // ------------------------------------------------------------ datasets
-  const effectiveDatasetId = selectedDatasetId ?? datasets[0]?.id ?? null;
+  // Nothing opens by itself: the Datasets page starts on the list and the user picks one.
+  const effectiveDatasetId = selectedDatasetId;
   const activeDetail = datasetDetail && datasetDetail.id === effectiveDatasetId ? datasetDetail : null;
 
   useEffect(() => {
@@ -185,10 +191,11 @@ export function Workspace({
   }, []);
 
   // ------------------------------------------------------------ actions
-  const startRun = useCallback(async (prompt: string, mode: Mode, country: Country) => {
+  /** Returns true when the run started (the prompt box then stays empty). */
+  const startRun = useCallback(async (prompt: string, mode: Mode, country: Country): Promise<boolean> => {
     if (!signedIn) {
       onRequireAuth({ run: { prompt, mode, country } }); // runs automatically after sign-in
-      return;
+      return false; // keep the text visible while the sign-in dialog is open
     }
     setSubmitting(true);
     try {
@@ -196,8 +203,10 @@ export function Workspace({
       setRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
       setTrackedRunId(run.id);
       setTab("home");
+      return true;
     } catch (err) {
       fail(err, "Could not start the workflow");
+      return false;
     } finally {
       setSubmitting(false);
     }
@@ -307,11 +316,27 @@ export function Workspace({
     notify(results.failed ? "error" : "success", parts.join(" · ") || "Nothing sent");
   };
 
-  const draftTemplate = async (goal: string): Promise<OutreachTemplate | null> => {
+  /** Leads page: every result with an e-mail in the chosen search becomes a lead (already-added ones are skipped). */
+  const openLeadsForDataset = async (datasetId: string) => {
+    try {
+      const detail = await api<DatasetDetail>(`/api/datasets/${datasetId}`);
+      const withEmail = detail.records.filter((r) => r.email).map((r) => r.id);
+      if (!withEmail.length) return;
+      const res = await api<{ leads: Lead[] }>("/api/leads/from-records", { method: "POST", json: { record_ids: withEmail } });
+      if (res.leads.length) {
+        const added = new Set(res.leads.map((l) => l.id));
+        setLeads((prev) => [...res.leads, ...prev.filter((l) => !added.has(l.id))]);
+      }
+    } catch (err) {
+      fail(err, "Could not load the contacts for this search");
+    }
+  };
+
+  const draftTemplate = async (goal: string, datasetId: string | null): Promise<OutreachTemplate | null> => {
     setDrafting(true);
     try {
       const res = await api<{ subject: string; body: string; ai: boolean }>("/api/leads/draft", {
-        method: "POST", json: { goal: goal || null, dataset_id: leads[0]?.dataset_id ?? null },
+        method: "POST", json: { goal: goal || null, dataset_id: datasetId },
       });
       if (!res.ai) notify("info", "AI drafting unavailable, loaded the default template.");
       return { subject: res.subject, body: res.body };
@@ -345,6 +370,7 @@ export function Workspace({
 
   return (
     <div className="relative min-h-screen bg-[#f8fafc] text-slate-900 selection:bg-blue-600 selection:text-white">
+      {tab === "home" && <CloudBackground />}
       <BrandCorner onClick={() => setTab("home")} />
       <FloatingNav activeTab={tab} onTab={goTab} runningCount={runningRuns.length}
         onRunningClick={() => {
@@ -354,7 +380,7 @@ export function Workspace({
         user={user} authLoading={authLoading} onSignIn={() => onRequireAuth({})}
         onSettings={() => setTab("settings")} onSignOut={onSignOut} />
 
-      <main className="pt-20 lg:pt-28 pb-28 lg:pb-12 print:pt-0 print:pb-0">
+      <main className="relative z-10 pt-20 lg:pt-28 pb-28 lg:pb-12 print:pt-0 print:pb-0">
         {offline && (
           <div className="mx-auto max-w-3xl px-4 mb-4 print:hidden">
             <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert">
@@ -365,24 +391,18 @@ export function Workspace({
         )}
 
         {tab === "home" && (
-          <section aria-label="Start a collection" className="relative flex flex-col items-center px-4 overflow-hidden pt-6 lg:pt-10">
-            <div className="absolute inset-0 pointer-events-none overflow-hidden">
-              <GridPattern
-                squares={[[4, 4], [5, 1], [8, 2], [5, 3], [5, 5], [10, 10], [12, 15], [15, 10], [10, 15], [7, 8], [14, 6], [18, 12]]}
-                className={cn("[mask-image:radial-gradient(650px_circle_at_center,white,transparent)]",
-                  "inset-x-0 inset-y-[-10%] h-[160%] skew-y-6 opacity-40 fill-blue-500/5 stroke-blue-500/10")} />
-            </div>
-            <div className="relative z-10 text-center max-w-3xl mx-auto mb-8">
+          <section aria-label="Start a collection" className="relative flex flex-col items-center px-4 pt-6 lg:pt-10">
+            <div className="relative z-10 text-center max-w-4xl mx-auto mb-8">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-50 border border-blue-200 text-sm font-semibold text-blue-700 mb-5">
                 <Sparkles className="w-4 h-4" />
                 {user ? `Hi ${user.name.split(" ")[0]}, what should Magpie collect?` : "AI-powered data intelligence"}
               </div>
               <h1 className="text-4xl sm:text-6xl font-black text-slate-900 tracking-tight leading-[1.1] mb-5">
-                You ask. <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-transparent">It collects.</span>
+                Start with a{" "}
+                <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-transparent">question...</span>
               </h1>
-              <p className="text-lg sm:text-xl text-slate-600 max-w-2xl mx-auto leading-relaxed">
-                Type what you need in your own words - typos and Hinglish are fine. The AI plans the search, reads the
-                web, checks every result and gives you a clean, source-backed list with contacts.
+              <p className="text-lg sm:text-xl text-slate-600 mx-auto leading-relaxed md:whitespace-nowrap">
+                Describe what you're looking for and let Magpie help you explore.
               </p>
             </div>
             <div className="relative z-20 w-full flex flex-col items-center">
@@ -400,11 +420,11 @@ export function Workspace({
             </div>
             <div className="relative z-10 grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-5xl w-full mt-14 text-left">
               {[
-                { icon: Wand2, tint: "bg-blue-50 border-blue-200 text-blue-600", title: "Understands anything", text: "Any wording, any city. The AI works out what you mean and designs the search." },
-                { icon: ShieldCheck, tint: "bg-emerald-50 border-emerald-200 text-emerald-600", title: "Every row is traceable", text: "Source link, time collected and the raw data it came from - one click away." },
-                { icon: Layers, tint: "bg-indigo-50 border-indigo-200 text-indigo-600", title: "Clean and ready to use", text: "AI-checked, duplicates merged, contacts found, export to CSV, JSON or PDF." },
+                { icon: Wand2, tint: "bg-blue-50 border-blue-200 text-blue-600", title: "Find anything", text: "Any requirement - Magpie will find out what you want and design the search." },
+                { icon: ShieldCheck, tint: "bg-emerald-50 border-emerald-200 text-emerald-600", title: "Every finding is traceable", text: "Source link and the raw data it came from - one click away." },
+                { icon: Layers, tint: "bg-indigo-50 border-indigo-200 text-indigo-600", title: "Clean and ready to use", text: "Magpie-checked, duplicates merged, contacts found, and you can export it in CSV, JSON or PDF format." },
               ].map(({ icon: Icon, tint, title, text }) => (
-                <div key={title} className="card p-5">
+                <div key={title} className="card p-5 bg-white/75 backdrop-blur-md border-white/80">
                   <div className={`w-10 h-10 rounded-xl border flex items-center justify-center mb-3 ${tint}`}><Icon className="w-5 h-5" /></div>
                   <div className="text-base font-bold text-slate-900 mb-1">{title}</div>
                   <div className="text-sm text-slate-600">{text}</div>
@@ -420,8 +440,10 @@ export function Workspace({
             onExport={exportDataset} onDelete={deleteDataset} onGoHome={() => setTab("home")} />
         )}
         {tab === "leads" && (
-          <LeadsView leads={leads} status={status} sending={sending} drafting={drafting} onSend={sendLeads}
-            onDraft={draftTemplate} onUpdate={updateLead} onDelete={deleteLead} onGoHome={() => setTab("home")} />
+          <LeadsView sender={user ? { name: user.name, email: user.email } : null}
+            datasets={datasets} leads={leads} status={status} sending={sending} drafting={drafting}
+            onOpenDataset={openLeadsForDataset} onSend={sendLeads} onDraft={draftTemplate} onUpdate={updateLead}
+            onDelete={deleteLead} onGoHome={() => setTab("home")} />
         )}
         {tab === "history" && (
           <HistoryView runs={mergedRuns} datasetIds={datasetIds}
@@ -430,7 +452,7 @@ export function Workspace({
             onGoHome={() => setTab("home")} />
         )}
         {tab === "settings" && user && (
-          <SettingsView user={user} status={status} onUserChange={onUserChange} onSignedOut={onSignOut} notify={notify} />
+          <SettingsView user={user} onUserChange={onUserChange} onSignedOut={onSignOut} notify={notify} />
         )}
       </main>
 

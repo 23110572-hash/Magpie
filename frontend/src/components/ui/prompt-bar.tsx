@@ -3,7 +3,8 @@ import { ArrowUp, Check, ChevronDown, Globe, Lightbulb, Loader2, Mic, Scale, Zap
 import { COUNTRIES, type Country, type Mode } from "@/types";
 
 export interface PromptBarProps {
-  onSubmit: (value: string, mode: Mode, country: Country) => void;
+  /** Resolve to false when the request could not start, so the text is put back in the box. */
+  onSubmit: (value: string, mode: Mode, country: Country) => Promise<boolean> | boolean | void;
   isLoading?: boolean;
 }
 
@@ -77,10 +78,12 @@ export default function PromptBar({ onSubmit, isLoading = false }: PromptBarProp
     }
   };
 
-  const submit = () => {
+  const submit = async () => {
     const text = value.trim();
     if (text.length < 3 || isLoading) return;
-    onSubmit(text, mode, country);
+    setValue(""); // clear like a chat box as soon as it is sent
+    const started = await onSubmit(text, mode, country);
+    if (started === false) setValue((current) => current || text); // keep it if it didn't start
   };
 
   const toggleRecording = () => {
@@ -139,10 +142,10 @@ export default function PromptBar({ onSubmit, isLoading = false }: PromptBarProp
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              submit();
+              void submit();
             }
           }}
-          placeholder="Ask in plain words, any spelling - e.g. “i need a graphic designer in delhi”"
+          placeholder="Describe what you're looking for..."
           className="mb-3 w-full resize-none bg-transparent text-lg sm:text-xl text-slate-900 placeholder:text-slate-400 focus:outline-none leading-relaxed" />
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
@@ -207,7 +210,7 @@ export default function PromptBar({ onSubmit, isLoading = false }: PromptBarProp
               }`}>
               <Mic className="w-5 h-5" />
             </button>
-            <button type="button" onClick={submit} disabled={!canSubmit} aria-label="Start collecting"
+            <button type="button" onClick={() => void submit()} disabled={!canSubmit} aria-label="Start collecting"
               className={`flex h-11 w-11 items-center justify-center rounded-xl shadow-md transition-all ${
                 canSubmit
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:scale-105 active:scale-95 shadow-blue-500/25"

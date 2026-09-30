@@ -371,10 +371,10 @@ async def _execute(tracker: RunTracker, http: searcher.HttpClient, fetcher: Page
         "duration_seconds": round(time.monotonic() - tracker.started, 1),
         "llm": dict(usage),
     })
-    if final:
-        has = lambda n: "has" if n == 1 else "have"  # noqa: E731
-        message = (f"Done: {len(final)} rows. Out of {len(final)}, {coverage['with_email']} {has(coverage['with_email'])} "
-                   f"an e-mail and {coverage['with_phone']} {has(coverage['with_phone'])} a phone number.")
+    if len(final) > 1:
+        message = f"We have found {len(final)} {plan.get('results_phrase') or 'results'}."
+    elif final:
+        message = f"We have found 1 match for “{plan['understood_as']}”."
     else:
-        message = "Finished, but nothing matched well enough. Try Deep mode or reword the request."
+        message = "We couldn't find anything that matched well enough. Try Deep mode or describe it a little differently."
     await tracker.update(status="completed", step="completed", progress=100, stats=stats, message=message)

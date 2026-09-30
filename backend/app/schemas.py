@@ -239,6 +239,7 @@ class LeadSchema(ORMModel):
     status: str
     template_subject: Optional[str] = None
     template_body: Optional[str] = None
+    looking_for: Optional[str] = None
     last_error: Optional[str] = None
     message_id: Optional[str] = None
     created_at: UtcDatetime = None

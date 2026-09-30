@@ -95,11 +95,97 @@ body {
   }
 }
 
+/* ---------------------------------------------------------------- Home sky animation */
+/* Four irregular wandering paths; each cloud picks one with its own speed, delay and direction. */
+@keyframes magpie-wander-1 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  18% { transform: translate3d(6vw, -3vh, 0) scale(1.05); }
+  41% { transform: translate3d(14vw, 1.5vh, 0) scale(0.96); }
+  63% { transform: translate3d(9vw, 5vh, 0) scale(1.03); }
+  84% { transform: translate3d(-2vw, 2vh, 0) scale(0.98); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes magpie-wander-2 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  24% { transform: translate3d(-9vw, 2.5vh, 0) scale(1.04); }
+  52% { transform: translate3d(-16vw, -2vh, 0) scale(0.97); }
+  77% { transform: translate3d(-5vw, -4.5vh, 0) scale(1.02); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes magpie-wander-3 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  29% { transform: translate3d(11vw, 4vh, 0) scale(0.95); }
+  56% { transform: translate3d(3vw, -3.5vh, 0) scale(1.06); }
+  81% { transform: translate3d(-8vw, 1vh, 0) scale(1); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes magpie-wander-4 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  21% { transform: translate3d(-6vw, -4vh, 0) scale(1.03); }
+  47% { transform: translate3d(7vw, -1vh, 0) scale(0.97); }
+  72% { transform: translate3d(13vw, 3.5vh, 0) scale(1.05); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes magpie-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes magpie-blob {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(8vw, -5vh, 0) scale(1.12);
+  }
+  66% {
+    transform: translate3d(-6vw, 6vh, 0) scale(0.94);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@keyframes magpie-twinkle {
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(0.6);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.3);
+  }
+}
+.magpie-cloud {
+  position: absolute;
+  /* Animated as a composited layer: the filtered cloud is rasterised once, then only moved. */
+  will-change: transform, opacity;
+}
+.magpie-blob {
+  will-change: transform;
+  animation-name: magpie-blob;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+.magpie-twinkle {
+  animation: magpie-twinkle 4.5s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+  /* Keep the sky, but still: clouds rest at their spread-out base positions. */
+  .magpie-cloud,
+  .magpie-blob,
+  .magpie-twinkle {
+    animation: none !important;
   }
 }
