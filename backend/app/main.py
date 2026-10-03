@@ -15,7 +15,10 @@ from sqlalchemy import delete, func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import CurrentUser, create_token, get_current_user, hash_password, invalidate_user_cache, verify_password
+from app.auth import (
+    CurrentUser, create_token, get_current_user, get_optional_user, hash_password, invalidate_user_cache,
+    verify_password,
+)
 from app.catalog import INTENT_LABELS, MARKETS, SOURCES
 from app.config import settings
 from app.credits import (
@@ -27,11 +30,13 @@ from app.models import CreditTransaction, DataRecord, Dataset, LeadOutreach, Use
 from app.schemas import (
     AccountDelete, AuthResponse, BuyCreditsRequest, CreditTransactionSchema, DatasetSchema, DraftRequest, LeadSchema,
     LeadSendRequest, LeadsFromRecordsRequest, LeadUpdateRequest, LoginRequest, PasswordChange, ProfileUpdate,
-    RecordDetailSchema, RecordSchema, RegisterRequest, RerunRequest, RunCreateRequest, UserSchema, WorkflowRunSchema,
+    RecordDetailSchema, RecordSchema, RegisterRequest, RerunRequest, RunCreateRequest, SuggestionsResponse, UserSchema,
+    WorkflowRunSchema,
 )
 from app.services.llm import chat_json
 from app.services.mailer import DEFAULT_BODY, DEFAULT_SUBJECT, deliver, render_template, with_footer
 from app.services.orchestrator import TERMINAL_STATUSES, begin_shutdown, run_pipeline_orchestrator
+from app.services.suggestions import invalidate_user_suggestions, suggestions_for
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -140,6 +145,13 @@ def public_config():
             "signup_credits": SIGNUP_CREDITS, "credit_packs": PACKS}
 
 
+@app.get("/api/suggestions", response_model=SuggestionsResponse)
+async def prompt_suggestions(market: str = Query("IN"), user: Optional[CurrentUser] = Depends(get_optional_user)):
+    """Example requests for the prompt bar, written by the AI for the selected market (and, when signed in, from
+    your own recent searches). Free: never charges credits. Always answers, with templates as fallback."""
+    return await suggestions_for(market, user.id if user else None)
+
+
 @app.get("/api/status")
 def system_status(user: CurrentUser = Depends(get_current_user)):
     keys = {"openrouter": settings.llm_enabled, "serper": bool(settings.SERPER_API_KEY),
@@ -240,6 +252,7 @@ async def delete_account(req: AccountDelete, user: CurrentUser = Depends(get_cur
         task = RUNNING_TASKS.get(run_id)
         if task:
             task.cancel()
+    invalidate_user_suggestions(user.id)
     invalidate_user_cache(user.id)
     return Response(status_code=204)
 
@@ -310,6 +323,7 @@ async def create_run(req: RunCreateRequest, user: CurrentUser = Depends(get_curr
             f"A {req.mode} search needs {credits_text(cost)}, but you have {exc.balance}. "
             "Buy more on the Credits page."))
     db.commit()
+    invalidate_user_suggestions(user.id)  # their next suggestions follow this search
     db.refresh(run)
     _spawn_run(run)
     return run
@@ -415,6 +429,7 @@ async def delete_run(run_id: str, user: CurrentUser = Depends(get_current_user),
         await asyncio.wait([task], timeout=10)
     db.execute(delete(WorkflowRun).where(WorkflowRun.id == run_id, WorkflowRun.user_id == user.id))
     db.commit()
+    invalidate_user_suggestions(user.id)
     return Response(status_code=204)
 
 

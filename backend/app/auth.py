@@ -85,3 +85,16 @@ def get_current_user(authorization: Optional[str] = Header(default=None)) -> Cur
     if token_version != version:
         raise _unauthorized("You were signed out. Please sign in again.")
     return CurrentUser(id=user_id, email=email, name=name)
+
+
+def get_optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[CurrentUser]:
+    """Like get_current_user, but guests and bad/expired/revoked tokens get None instead of a 401."""
+    if not authorization:
+        return None
+    try:
+        return get_current_user(authorization)
+    except HTTPException:
+        return None
+    except Exception as exc:  # e.g. a database outage must not break a public endpoint
+        logger.warning("Optional sign-in check failed: %s", exc.__class__.__name__)
+        return None

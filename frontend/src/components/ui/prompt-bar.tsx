@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Check, ChevronDown, Globe, Lightbulb, Loader2, Mic, Scale, Zap, type LucideIcon } from "lucide-react";
+import { fetchSuggestions } from "@/lib/api";
 import { COUNTRIES, MODE_CREDITS, creditsText, type Country, type Mode } from "@/types";
 
 export interface PromptBarProps {
@@ -10,20 +11,39 @@ export interface PromptBarProps {
   showCredits?: boolean;
   /** Request to start with, e.g. one that could not start right after signing in. */
   initial?: { prompt: string; mode: Mode } | null;
+  /** Signed-in user, so suggestions follow the account. */
+  userId?: string | null;
 }
 
 const MODES: { id: Mode; icon: LucideIcon; label: string; hint: string }[] = [
   { id: "Fast", icon: Zap, label: "Fast", hint: "Quick scan of the top results · ~40 s" },
-  { id: "Balanced", icon: Scale, label: "Balanced", hint: "Reads lists and finds contacts · ~1.5 min" },
-  { id: "Deep", icon: Lightbulb, label: "Deep", hint: "8 searches, more cities, pages and contacts · ~3-4 min" },
+  { id: "Balanced", icon: Scale, label: "Balanced", hint: "Reads more pages and finds contacts · ~1.5 min" },
+  { id: "Deep", icon: Lightbulb, label: "Deep", hint: "Widest search, most results and contacts · ~3-4 min" },
 ];
 
-const SUGGESTIONS = [
-  "i need devloper in chandigarh",
-  "graphic designers from india",
-  "digital marketing agencies in mumbai with emails",
-  "react js jobs in bangalore for freshers",
+// Shown until the AI suggestions arrive, or when they can't be loaded (same as backend/app/services/suggestions.py).
+const FALLBACK_PLACES: Record<Country, string[]> = {
+  IN: ["India"],
+  US: ["the US"],
+  EU: ["Germany", "France", "the Netherlands", "Spain"],
+};
+const FALLBACK_TEMPLATES = [
+  (place: string) => `web developers in ${place}`,
+  (place: string) => `digital marketing agencies in ${place} with emails`,
+  (place: string) => `entry-level software jobs in ${place}`,
+  (place: string) => `tech events in ${place} looking for sponsors`,
 ];
+
+function fallbackSuggestions(country: Country): string[] {
+  const places = FALLBACK_PLACES[country];
+  return FALLBACK_TEMPLATES.map((template, i) => template(places[i % places.length]));
+}
+
+function cleanSuggestions(items: unknown): string[] {
+  if (!Array.isArray(items)) return [];
+  const texts = items.filter((s): s is string => typeof s === "string").map((s) => s.trim()).filter(Boolean);
+  return [...new Set(texts)].slice(0, 6);
+}
 
 const COUNTRY_KEY = "magpie.country";
 
@@ -48,13 +68,16 @@ function initialCountry(): Country {
   return "IN";
 }
 
-export default function PromptBar({ onSubmit, isLoading = false, showCredits = false, initial = null }: PromptBarProps) {
+export default function PromptBar({
+  onSubmit, isLoading = false, showCredits = false, initial = null, userId = null,
+}: PromptBarProps) {
   const [value, setValue] = useState(initial?.prompt ?? "");
   const [open, setOpen] = useState<"mode" | "country" | null>(null);
   const [mode, setMode] = useState<Mode>(initial?.mode ?? "Balanced");
   const [country, setCountry] = useState<Country>(initialCountry);
   const [recording, setRecording] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
+  const [fetched, setFetched] = useState<{ key: string; items: string[] } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
@@ -71,6 +94,30 @@ export default function PromptBar({ onSubmit, isLoading = false, showCredits = f
       recognitionRef.current?.stop();
     };
   }, []);
+
+  // Suggestions for the selected market (and account). Each change cancels the previous request, so quick
+  // switching never shows another country's suggestions.
+  const suggestionKey = `${userId ?? "guest"}:${country}`;
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetchSuggestions(country, controller.signal)
+        .then((res) => {
+          if (controller.signal.aborted) return;
+          const items = res?.market === country ? cleanSuggestions(res.suggestions) : [];
+          setFetched({ key: suggestionKey, items: items.length ? items : fallbackSuggestions(country) });
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setFetched({ key: suggestionKey, items: fallbackSuggestions(country) });
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [suggestionKey, country]);
+  const suggestionsLoading = fetched?.key !== suggestionKey;
+  const suggestions = fetched && fetched.key === suggestionKey ? fetched.items : fallbackSuggestions(country);
 
   const chooseCountry = (code: Country) => {
     setCountry(code);
@@ -230,10 +277,13 @@ export default function PromptBar({ onSubmit, isLoading = false, showCredits = f
           </div>
         </div>
         {micError && <p className="mt-2 text-sm text-rose-600" role="alert">{micError}</p>}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {SUGGESTIONS.map((s) => (
+        <div role="group" aria-label="Suggested requests" aria-busy={suggestionsLoading}
+          className="mt-3 flex min-h-[68px] flex-wrap content-start gap-2">
+          {suggestions.map((s) => (
             <button key={s} type="button" onClick={() => setValue(s)}
-              className="text-xs px-3 py-1.5 rounded-full bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200">
+              className={`text-xs px-3 py-1.5 rounded-full bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 transition-opacity ${
+                suggestionsLoading ? "opacity-60" : ""
+              }`}>
               {s}
             </button>
           ))}

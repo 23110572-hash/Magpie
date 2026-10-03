@@ -243,6 +243,14 @@ export interface SystemStatus {
   email: { mode: "relay" | "direct" | "simulated"; from: string | null; reply_to: string };
 }
 
+/** GET /api/suggestions */
+export interface SuggestionsResponse {
+  market: Country | null; // null = market not recognised (generic examples)
+  suggestions: string[];
+  ai: boolean; // false = template fallback
+  personalised: boolean; // true = based on the signed-in user's recent searches
+}
+
 export const TERMINAL_STATUSES = ["completed", "failed", "cancelled"];
 export const isTerminal = (status?: string | null) => !!status && TERMINAL_STATUSES.includes(status);
 

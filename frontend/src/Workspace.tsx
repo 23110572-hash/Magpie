@@ -499,7 +499,7 @@ export function Workspace({
             </div>
             <div className="relative z-20 w-full flex flex-col items-center">
               <PromptBar key={promptDraft?.key ?? 0} initial={promptDraft} onSubmit={startRun} isLoading={submitting}
-                showCredits={signedIn} />
+                showCredits={signedIn} userId={user?.id ?? null} />
               {!user && !authLoading && (
                 <p className="mt-4 text-sm text-slate-600 text-center">
                   Type your request and press enter - you'll be asked to{" "}

@@ -105,6 +105,14 @@ class AccountDelete(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
 
 
+# ---------------------------------------------------------------- suggestions
+class SuggestionsResponse(BaseModel):
+    market: Optional[Country] = None  # None = the market was not recognised (generic examples)
+    suggestions: List[str]
+    ai: bool = False  # False = template fallback
+    personalised: bool = False  # True = based on the signed-in user's own recent searches
+
+
 # ---------------------------------------------------------------- credits
 class BuyCreditsRequest(BaseModel):
     pack_id: str = Field(..., min_length=1, max_length=32)

@@ -1,3 +1,5 @@
+import type { Country, SuggestionsResponse } from "@/types";
+
 // Base URL of the FastAPI backend. On Vercel set VITE_API_BASE to the Render URL.
 const RAW_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.trim() || "http://localhost:8008";
 export const API_BASE = RAW_BASE.replace(/\/+$/, "");
@@ -136,6 +138,11 @@ export async function downloadFile(path: string, fallbackName: string): Promise<
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(href), 2000);
+}
+
+/** Example requests for the prompt bar (free; personalised when signed in). */
+export function fetchSuggestions(market: Country, signal?: AbortSignal): Promise<SuggestionsResponse> {
+  return api<SuggestionsResponse>(`/api/suggestions?market=${encodeURIComponent(market)}`, { signal });
 }
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
