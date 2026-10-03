@@ -1,7 +1,7 @@
 import React from "react";
 import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Loader2, RotateCcw, Sparkles, XCircle } from "lucide-react";
 import type { Intent, WorkflowRun } from "@/types";
-import { countryLabel, isTerminal, resultCount, resultSentence } from "@/types";
+import { countryLabel, creditsText, isTerminal, resultCount, resultSentence, runCost } from "@/types";
 import { formatDuration } from "@/lib/format";
 
 interface ProcessingTrackerProps {
@@ -59,7 +59,8 @@ export const ProcessingTracker: React.FC<ProcessingTrackerProps> = ({ run, onVie
       <div className="flex items-start justify-between gap-3 pb-4 border-b border-slate-100 mb-5">
         <div className="min-w-0">
           <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">
-            {countryLabel(run.country)} · {run.mode || "Balanced"} mode
+            {countryLabel(run.country)} · {run.mode || "Balanced"} mode · {creditsText(runCost(run))}
+            {run.credits_refunded ? <span className="text-emerald-700"> refunded</span> : null}
           </div>
           <div className="text-lg font-bold text-slate-900 line-clamp-2">“{run.prompt}”</div>
         </div>

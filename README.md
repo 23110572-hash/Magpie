@@ -83,6 +83,10 @@ businesses, companies, sponsors, events, news and market data.
 - **History and outreach** - every workflow and dataset is kept per user; runs can be re-opened, re-run or deleted.
   Selected rows become leads, and the AI drafts a personalised outreach e-mail.
 - **Private workspaces** - real accounts; each user only sees their own workflows, datasets and leads.
+- **Credits** - every new account gets 10 free credits once, at sign-up. A search costs 1 credit in Fast,
+  2 in Balanced and 4 in Deep mode (a re-run is charged again). More credits are added instantly on the Credits
+  page: 10 credits for ₹50, 100 for ₹500 or 500 for ₹2,500. Credits are refunded only when a search fails (a timeout,
+  an error or a server restart); cancelled searches and searches with no results are not refunded.
 
 ---
 
@@ -100,6 +104,24 @@ validation and traceability.
 | **5. Merge** | The same person or business found through different sources becomes one richer row (matched by link, e-mail, phone, website, profile or name + organisation + place). |
 | **6. Find contacts** | For the best rows, Magpie visits the result's own website and contact page and keeps only e-mails and phone numbers that are published there. |
 | **7. Store** | Rows are saved with their source URL, timestamp and raw snapshot, and the contact coverage is calculated. |
+
+**How deep each mode goes**
+
+| | Fast | Balanced | Deep |
+| --- | --- | --- | --- |
+| Credits per search | 1 | 2 | 4 |
+| Google searches | 2 | 4 | 8 |
+| Results per Google search | 10 | 10 | 20 (2 pages) |
+| Tavily searches | 1 | 2 | 4 |
+| Google Maps searches | 1 | 2 | 4 x 2 pages |
+| Cities covered for country-wide requests | 2 | 4 | 8 |
+| Web results the AI reviews | 30 | 60 | 160 |
+| List pages read | 3 | 8 | 20 + next page of the best lists |
+| GitHub profiles | 15 | 30 | 90 |
+| Adzuna jobs | 40 | 50 | 100 |
+| Results checked by the AI | 120 | 250 | 600 |
+| Websites checked for contacts | 12 | 30 | 80 |
+| Expected time | ~40 s | ~1.5 min | ~3-4 min |
 
 **Principles we hold to**
 
@@ -136,7 +158,7 @@ flowchart LR
 
 | Layer | Technology | Role |
 | --- | --- | --- |
-| Dashboard | React, TypeScript, Tailwind CSS | Prompt bar with market and depth, live progress tracker, datasets (table / cards), leads, history, settings |
+| Dashboard | React, TypeScript, Tailwind CSS | Prompt bar with market and depth, live progress tracker, datasets (table / cards), leads, history, credits, settings |
 | Workflow engine | Python, FastAPI, asyncio | Runs the seven steps in parallel and streams progress to the dashboard |
 | AI brain | Meta Llama 3.3 70B via OpenRouter | Planning, page triage, extraction, relevance checking, outreach drafts |
 | Web discovery | Serper (Google web, Maps, News), Tavily | Finding lists, directories, profiles and businesses in the chosen market |
@@ -159,7 +181,7 @@ User ──< Workflow run ──< Dataset ──< Record (source URL · timestam
 | Understand data requirements from natural-language prompts | The AI planner reads any wording, fixes spelling, translates mixed languages, and shows its interpretation ("Understood as", "Did you mean") with alternative readings |
 | Collect and process information from multiple permitted sources | 12 source types queried in parallel per request, chosen by the AI, targeted to the selected market; robots.txt and site terms respected |
 | Provide source-backed, traceable data | Every row stores its source link, collection time, matching reason, other places it was seen and the raw snapshot, viewable from the dashboard |
-| Present results through an interactive dashboard | Home (prompt + live tracker), Datasets (table / cards, coverage bars), Leads, History, Settings |
+| Present results through an interactive dashboard | Home (prompt + live tracker), Datasets (table / cards, coverage bars), Leads, History, Credits, Settings |
 | Search, filter and export collected data | Full-text search, source / has-e-mail / has-phone filters, CSV, JSON and PDF export |
 | Dynamically design and execute data-collection workflows | A new plan (queries, sources, columns, filters) is generated for every request; nothing is hardcoded per use case |
 | Clean, structure, validate and deduplicate results | Field cleaning, AI relevance scoring against the request, placeholder and fake-contact filtering, cross-source merging |

@@ -13,16 +13,23 @@ from app.catalog import (
 from app.config import settings
 from app.services.llm import chat_json
 
+# How much each mode searches. Credits: Fast 1, Balanced 2, Deep 4 (see app/credits.py).
 MODE_LIMITS: Dict[str, Dict[str, int]] = {
-    "Fast": {"web_queries": 2, "serp_results": 10, "places_queries": 1, "cover_cities": 2, "places_pages": 1,
-             "tavily_results": 8, "pages": 3, "github_profiles": 15, "ats_companies": 4, "judge_cap": 120,
-             "contact_checks": 12, "per_source": 40, "max_records": 80, "adzuna_countries": 1},
-    "Balanced": {"web_queries": 3, "serp_results": 10, "places_queries": 2, "cover_cities": 4, "places_pages": 1,
-                 "tavily_results": 10, "pages": 8, "github_profiles": 30, "ats_companies": 8, "judge_cap": 250,
-                 "contact_checks": 30, "per_source": 80, "max_records": 200, "adzuna_countries": 2},
-    "Deep": {"web_queries": 5, "serp_results": 20, "places_queries": 3, "cover_cities": 6, "places_pages": 2,
-             "tavily_results": 15, "pages": 15, "github_profiles": 60, "ats_companies": 12, "judge_cap": 450,
-             "contact_checks": 60, "per_source": 150, "max_records": 400, "adzuna_countries": 4},
+    "Fast": {"web_queries": 2, "serp_results": 10, "serp_pages": 1, "tavily_queries": 1, "tavily_results": 8,
+             "places_queries": 1, "places_pages": 1, "places_calls": 2, "cover_cities": 2, "triage_cap": 30,
+             "pages": 3, "next_pages": 0, "github_profiles": 15, "github_locations": 2, "adzuna_per_page": 40,
+             "adzuna_pages": 1, "adzuna_countries": 1, "ats_companies": 4, "judge_cap": 120, "contact_checks": 12,
+             "per_source": 40, "max_records": 80},
+    "Balanced": {"web_queries": 4, "serp_results": 10, "serp_pages": 1, "tavily_queries": 2, "tavily_results": 10,
+                 "places_queries": 2, "places_pages": 1, "places_calls": 8, "cover_cities": 4, "triage_cap": 60,
+                 "pages": 8, "next_pages": 0, "github_profiles": 30, "github_locations": 4, "adzuna_per_page": 50,
+                 "adzuna_pages": 1, "adzuna_countries": 2, "ats_companies": 8, "judge_cap": 250,
+                 "contact_checks": 30, "per_source": 80, "max_records": 200},
+    "Deep": {"web_queries": 8, "serp_results": 10, "serp_pages": 2, "tavily_queries": 4, "tavily_results": 15,
+             "places_queries": 4, "places_pages": 2, "places_calls": 24, "cover_cities": 8, "triage_cap": 160,
+             "pages": 20, "next_pages": 5, "github_profiles": 90, "github_locations": 6, "adzuna_per_page": 50,
+             "adzuna_pages": 2, "adzuna_countries": 4, "ats_companies": 12, "judge_cap": 600, "contact_checks": 80,
+             "per_source": 200, "max_records": 500},
 }
 
 # Fixed columns every dataset shows; the planner adds request-specific ones on top.
@@ -69,17 +76,20 @@ Return ONLY a JSON object with these keys:
 - "place": {{"city": string|null, "region": string|null, "country": string, "country_code": ISO 3166-1 alpha-2
     lowercase, "aliases": other spellings of the city/region (e.g. ["bengaluru","bangalore"]),
     "scope": "city"|"region"|"country"|"remote"|"any"}}
-- "cover_cities": when scope is country or region (e.g. "all over India"), 3-8 major cities to cover; else [].
+- "cover_cities": when scope is country or region (e.g. "all over India"), exactly {cover_cities} major cities to
+    cover; else [].
 - "filters": {{"remote": true|false|null, "seniority": [..], "experience": string|null,
     "min_salary": {{"amount": number, "currency": "INR"|"USD"|"EUR"|..., "period": "year"|"month"|"hour"}}|null,
     "recency_days": number|null, "needs_contact": true|false}}
 - "columns": 3-7 extra fields to show per row as [{{"key": "snake_case", "label": "Label"}}]. Do not include
     name, organisation, location, email, phone, website, source or url - they are always shown.
 - "queries": {{
-    "web": 3-6 Google queries that surface listing pages, directories and profiles for this exact request,
-           each including the place. For people include profile searches such as
+    "web": exactly {web_queries} different Google queries that surface listing pages, directories and profiles
+           for this exact request, each including the place. Make every query different: synonyms of the role,
+           nearby areas, directories, marketplaces and "top N" lists. For people include profile searches such as
            site:linkedin.com/in "<role>" "<city>" and portfolio/freelancer sites that suit the profession.
-    "places": 0-3 Google Maps queries (for local_businesses, or professionals who run a studio/agency/practice),
+    "places": 0-{places_queries} Google Maps queries (for local_businesses, or professionals who run a
+           studio/agency/practice),
     "jobs": short job-search keywords or null,
     "github_languages": up to 3 GitHub languages when software developers are wanted, else [],
     "news": 0-2 news queries }}
@@ -269,7 +279,7 @@ def _normalize(raw: Dict[str, Any], prompt: str, market: Dict[str, Any], forced:
         "filters": _filters(raw.get("filters")),
         "columns": _columns(raw.get("columns"), intent),
         "queries": {
-            "web": _str_list(queries.get("web"), 6, 220) or [corrected],
+            "web": _str_list(queries.get("web"), 10, 220) or [corrected],
             "places": _str_list(queries.get("places"), 4, 160),
             "jobs": _s(queries.get("jobs"), 120) or None,
             "github_languages": _str_list(queries.get("github_languages"), 3, 30),
@@ -280,8 +290,29 @@ def _normalize(raw: Dict[str, Any], prompt: str, market: Dict[str, Any], forced:
     }
 
 
+def _top_up_queries(plan: Dict[str, Any], target: int) -> None:
+    """Make sure the plan has as many Google queries as the mode pays for (Deep = 8), even if the AI wrote fewer."""
+    web = plan["queries"]["web"]
+    place = plan["place"]
+    where = place.get("city") or place.get("region") or place.get("country") or ""
+    entity = plan["entity"] if plan["entity"] != "result" else ""
+    extra = [plan["corrected_prompt"]]
+    if entity:
+        extra += [f"{entity} {where}", f"best {entity} in {where}", f"{entity} {where} contact details",
+                  f"{entity} directory {where}", f"list of {entity} in {where}", f"top {entity} {where}"]
+    seen = {q.lower() for q in web}
+    for query in extra:
+        if len(web) >= target:
+            break
+        query = " ".join(query.split())
+        if query and query.lower() not in seen:
+            web.append(query)
+            seen.add(query.lower())
+
+
 async def plan_collection(prompt: str, mode: str, market_code: str, forced_intent: Optional[str] = None) -> Dict[str, Any]:
     mode = mode if mode in MODE_LIMITS else "Balanced"
+    limits = MODE_LIMITS[mode]
     market_code = market_code if market_code in MARKETS else "IN"
     market = MARKETS[market_code]
     catalog = "\n".join(f"- {key}: {meta['description']}" for key, meta in SOURCES.items())
@@ -289,8 +320,9 @@ async def plan_collection(prompt: str, mode: str, market_code: str, forced_inten
     if forced_intent:
         user += f"\nThe user explicitly wants intent = {forced_intent}. Plan for that intent."
 
-    raw = await chat_json(PLANNER_PROMPT.format(market=market["label"], sources=catalog), user,
-                          max_tokens=1800, timeout=45) if settings.llm_enabled else None
+    system = PLANNER_PROMPT.format(market=market["label"], sources=catalog, web_queries=limits["web_queries"],
+                                   places_queries=limits["places_queries"], cover_cities=limits["cover_cities"])
+    raw = await chat_json(system, user, max_tokens=2200, timeout=45) if settings.llm_enabled else None
     if isinstance(raw, dict):
         plan = _normalize(raw, prompt, market, forced_intent)
         plan["planner"], plan["planner_note"] = "llm", None
@@ -301,7 +333,8 @@ async def plan_collection(prompt: str, mode: str, market_code: str, forced_inten
                                 else "AI planner did not answer, so Magpie searched the web for your exact words")
 
     plan["mode"], plan["market"], plan["market_label"] = mode, market_code, market["label"]
-    plan["limits"] = MODE_LIMITS[mode]
+    plan["limits"] = limits
+    _top_up_queries(plan, limits["web_queries"])
     plan["search"] = _search_settings(plan["place"], market_code)
     suggested = plan.pop("_suggested", [])
     _choose_sources(plan, suggested, market_code)

@@ -8,12 +8,18 @@ import { DatasetsView } from "@/components/DatasetsView";
 import { LeadsView, type OutreachTemplate } from "@/components/LeadsView";
 import { HistoryView } from "@/components/HistoryView";
 import { SettingsView } from "@/components/SettingsView";
+import { CreditsView } from "@/components/CreditsView";
+import { CreditsDialog } from "@/components/CreditsDialog";
 import { Toasts, type Toast } from "@/components/Toasts";
 import { API_BASE, ApiError, api, downloadFile, sleep, streamEvents } from "@/lib/api";
 import type {
-  Country, DatasetDetail, DatasetSummary, Intent, Lead, Mode, PendingAction, SystemStatus, Tab, User, WorkflowRun,
+  Country, CreditsInfo, DatasetDetail, DatasetSummary, Intent, Lead, Mode, PendingAction, SystemStatus, Tab, User,
+  WorkflowRun,
 } from "@/types";
-import { isTerminal } from "@/types";
+import { CREDIT_PACKS, MODE_CREDITS, creditsText, isTerminal, modeOf } from "@/types";
+
+/** "no_credits": the balance does not cover the search (checked here first, and always by the server). */
+type RunOutcome = "started" | "no_credits" | "failed";
 
 /** Prefer the most advanced state; once both are final, the persisted row wins. */
 function pickRun(live?: WorkflowRun, polled?: WorkflowRun): WorkflowRun | undefined {
@@ -57,6 +63,15 @@ export function Workspace({
   const [sending, setSending] = useState<{ done: number; total: number } | null>(null);
   const [drafting, setDrafting] = useState(false);
 
+  const [credits, setCredits] = useState<CreditsInfo | null>(null);
+  const [buyingPack, setBuyingPack] = useState<string | null>(null);
+  // "You need more credits": the search waiting for a top-up, and the promise that resumes it.
+  const [creditAsk, setCreditAsk] = useState<{ mode: Mode; needed: number } | null>(null);
+  const creditWaiter = useRef<{ needed: number; resolve: (ok: boolean) => void } | null>(null);
+  // A request from before sign-in that did not start goes back into the prompt box.
+  const [promptDraft, setPromptDraft] = useState<{ key: number; prompt: string; mode: Mode } | null>(null);
+  const balance = credits?.balance ?? user?.credits ?? 0;
+
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastSeq = useRef(0);
 
@@ -83,6 +98,7 @@ export function Workspace({
   const refreshDatasets = useCallback(() => api<DatasetSummary[]>("/api/datasets").then(setDatasets).catch(quiet), [quiet]);
   const refreshLeads = useCallback(() => api<Lead[]>("/api/leads").then(setLeads).catch(quiet), [quiet]);
   const refreshStatus = useCallback(() => api<SystemStatus>("/api/status").then(setStatus).catch(quiet), [quiet]);
+  const refreshCredits = useCallback(() => api<CreditsInfo>("/api/credits").then(setCredits).catch(quiet), [quiet]);
 
   // Guests have no data: nothing below talks to the API until the visitor signs in.
   useEffect(() => {
@@ -102,6 +118,12 @@ export function Workspace({
     return () => window.clearInterval(id);
   }, [signedIn, anyRunning, refreshRuns]);
 
+  // Balance: on sign-in, and whenever searches start or finish (a failed search gives its credits back).
+  useEffect(() => {
+    if (!signedIn) return;
+    void refreshCredits();
+  }, [signedIn, anyRunning, refreshCredits]);
+
   const completedSignature = runs.filter((r) => r.status === "completed").map((r) => r.id).join(",");
   useEffect(() => {
     if (!signedIn) return;
@@ -115,7 +137,8 @@ export function Workspace({
       void refreshDatasets(); // the Leads page lists your searches
     }
     if (tab === "datasets") void refreshDatasets();
-  }, [signedIn, tab, refreshLeads, refreshDatasets]);
+    if (tab === "credits") void refreshCredits();
+  }, [signedIn, tab, refreshLeads, refreshDatasets, refreshCredits]);
 
   /** Every tab except Home needs an account. */
   const goTab = useCallback((next: Tab) => {
@@ -190,34 +213,107 @@ export function Workspace({
     setTab("datasets");
   }, []);
 
+  // ------------------------------------------------------------ credits
+  /** Opens "You need more credits"; resolves true once the balance covers the search, false when cancelled. */
+  const askForCredits = useCallback((mode: Mode, needed: number) => new Promise<boolean>((resolve) => {
+    creditWaiter.current?.resolve(false); // only one search waits at a time
+    creditWaiter.current = { needed, resolve };
+    setCreditAsk({ mode, needed });
+  }), []);
+
+  const settleCredits = useCallback((ok: boolean) => {
+    const waiter = creditWaiter.current;
+    creditWaiter.current = null;
+    setCreditAsk(null);
+    waiter?.resolve(ok);
+  }, []);
+  const cancelCredits = useCallback(() => settleCredits(false), [settleCredits]);
+
+  /** MVP: the pack is added straight away, no payment is taken. Returns the new balance, or null if it failed. */
+  const purchase = useCallback(async (packId: string): Promise<number | null> => {
+    setBuyingPack(packId);
+    try {
+      const res = await api<{ balance: number; added: number }>("/api/credits/buy", {
+        method: "POST", json: { pack_id: packId },
+      });
+      setCredits((prev) => (prev ? { ...prev, balance: res.balance } : prev));
+      void refreshCredits(); // the history gets the purchase
+      notify("success", `Added ${creditsText(res.added)}. You now have ${creditsText(res.balance)}.`);
+      return res.balance;
+    } catch (err) {
+      fail(err, "Could not add the credits");
+      return null;
+    } finally {
+      setBuyingPack(null);
+    }
+  }, [notify, fail, refreshCredits]);
+
+  const buyPack = (packId: string) => void purchase(packId);
+
+  /** Bought from the dialog: when the balance now covers the waiting search, the dialog closes and it starts. */
+  const buyFromDialog = async (packId: string) => {
+    const newBalance = await purchase(packId);
+    const waiter = creditWaiter.current;
+    if (newBalance !== null && waiter && newBalance >= waiter.needed) settleCredits(true);
+  };
+
   // ------------------------------------------------------------ actions
+  /** Creates a run; the server charges it, or answers 402 when the balance is too low. */
+  const createRun = useCallback(async (path: string, json: unknown, fallback: string): Promise<RunOutcome> => {
+    try {
+      const run = await api<WorkflowRun>(path, { method: "POST", json });
+      setRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
+      setTrackedRunId(run.id);
+      setTab("home");
+      void refreshCredits(); // the search was paid for
+      return "started";
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        await refreshCredits(); // so the dialog shows the real balance
+        return "no_credits";
+      }
+      fail(err, fallback);
+      return "failed";
+    }
+  }, [fail, refreshCredits]);
+
+  /** Checks the balance first; when it is short, asks for credits and tries again after a purchase. */
+  const runWithCredits = useCallback(async (mode: Mode, create: () => Promise<RunOutcome>): Promise<boolean> => {
+    const needed = MODE_CREDITS[mode];
+    let outcome: RunOutcome = balance >= needed ? await create() : "no_credits";
+    while (outcome === "no_credits") {
+      if (!(await askForCredits(mode, needed))) return false;
+      outcome = await create();
+    }
+    return outcome === "started";
+  }, [balance, askForCredits]);
+
   /** Returns true when the run started (the prompt box then stays empty). */
   const startRun = useCallback(async (prompt: string, mode: Mode, country: Country): Promise<boolean> => {
     if (!signedIn) {
       onRequireAuth({ run: { prompt, mode, country } }); // runs automatically after sign-in
       return false; // keep the text visible while the sign-in dialog is open
     }
-    setSubmitting(true);
-    try {
-      const run = await api<WorkflowRun>("/api/runs", { method: "POST", json: { prompt, mode, country } });
-      setRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
-      setTrackedRunId(run.id);
-      setTab("home");
-      return true;
-    } catch (err) {
-      fail(err, "Could not start the workflow");
-      return false;
-    } finally {
-      setSubmitting(false);
-    }
-  }, [signedIn, onRequireAuth, fail]);
+    return runWithCredits(mode, async () => {
+      setSubmitting(true);
+      try {
+        return await createRun("/api/runs", { prompt, mode, country }, "Could not start the workflow");
+      } finally {
+        setSubmitting(false);
+      }
+    }); // false (e.g. the credits dialog was cancelled) puts the text back in the box
+  }, [signedIn, onRequireAuth, runWithCredits, createRun]);
 
   // Carry out what the visitor tried to do before signing in (the tab was restored in useState).
   useEffect(() => {
     if (!signedIn || !pending) return;
     const timer = window.setTimeout(() => {
       onPendingConsumed();
-      if (pending.run) void startRun(pending.run.prompt, pending.run.mode, pending.run.country);
+      if (!pending.run) return;
+      const { prompt, mode, country } = pending.run;
+      void startRun(prompt, mode, country).then((started) => {
+        if (!started) setPromptDraft({ key: Date.now(), prompt, mode });
+      });
     }, 0);
     return () => window.clearTimeout(timer);
   }, [signedIn, pending, onPendingConsumed, startRun]);
@@ -233,15 +329,11 @@ export function Workspace({
     }
   };
 
+  /** A re-run is a new search and is charged again, at the cost of the original run's mode. */
   const rerun = async (runId: string, intent?: Intent) => {
-    try {
-      const run = await api<WorkflowRun>(`/api/runs/${runId}/rerun`, { method: "POST", json: { intent: intent ?? null } });
-      setRuns((prev) => [run, ...prev]);
-      setTrackedRunId(run.id);
-      setTab("home");
-    } catch (err) {
-      fail(err, "Could not run it again");
-    }
+    const mode = modeOf(runs.find((r) => r.id === runId)?.mode);
+    await runWithCredits(mode, () =>
+      createRun(`/api/runs/${runId}/rerun`, { intent: intent ?? null }, "Could not run it again"));
   };
 
   const deleteRun = async (run: WorkflowRun) => {
@@ -377,8 +469,8 @@ export function Workspace({
           if (runningRuns[0]) setTrackedRunId(runningRuns[0].id);
           setTab("home");
         }}
-        user={user} authLoading={authLoading} onSignIn={() => onRequireAuth({})}
-        onSettings={() => setTab("settings")} onSignOut={onSignOut} />
+        user={user} creditBalance={user ? balance : null} authLoading={authLoading} onSignIn={() => onRequireAuth({})}
+        onCredits={() => setTab("credits")} onSettings={() => setTab("settings")} onSignOut={onSignOut} />
 
       <main className="relative z-10 pt-20 lg:pt-28 pb-28 lg:pb-12 print:pt-0 print:pb-0">
         {offline && (
@@ -395,7 +487,7 @@ export function Workspace({
             <div className="relative z-10 text-center max-w-4xl mx-auto mb-8">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-50 border border-blue-200 text-sm font-semibold text-blue-700 mb-5">
                 <Sparkles className="w-4 h-4" />
-                {user ? `Hi ${user.name.split(" ")[0]}, what should Magpie collect?` : "AI-powered data intelligence"}
+                {user ? `Hi ${user.name.split(" ")[0]}, what should Magpie collect?` : "Smart Data Intelligence System"}
               </div>
               <h1 className="text-4xl sm:text-6xl font-black text-slate-900 tracking-tight leading-[1.1] mb-5">
                 Start with a{" "}
@@ -406,7 +498,8 @@ export function Workspace({
               </p>
             </div>
             <div className="relative z-20 w-full flex flex-col items-center">
-              <PromptBar onSubmit={startRun} isLoading={submitting} />
+              <PromptBar key={promptDraft?.key ?? 0} initial={promptDraft} onSubmit={startRun} isLoading={submitting}
+                showCredits={signedIn} />
               {!user && !authLoading && (
                 <p className="mt-4 text-sm text-slate-600 text-center">
                   Type your request and press enter - you'll be asked to{" "}
@@ -451,11 +544,19 @@ export function Workspace({
             onViewDataset={openDataset} onRerun={(id) => rerun(id)} onCancel={cancelRun} onDelete={deleteRun}
             onGoHome={() => setTab("home")} />
         )}
+        {tab === "credits" && user && (
+          <CreditsView balance={balance} credits={credits} buyingPack={buyingPack} onBuy={buyPack} />
+        )}
         {tab === "settings" && user && (
           <SettingsView user={user} onUserChange={onUserChange} onSignedOut={onSignOut} notify={notify} />
         )}
       </main>
 
+      {creditAsk && (
+        <CreditsDialog mode={creditAsk.mode} needed={creditAsk.needed} balance={balance}
+          packs={credits?.packs ?? CREDIT_PACKS} buyingPack={buyingPack}
+          onBuy={(packId) => void buyFromDialog(packId)} onCancel={cancelCredits} />
+      )}
       <Toasts toasts={toasts} onDismiss={(id) => setToasts((prev) => prev.filter((t) => t.id !== id))} />
     </div>
   );

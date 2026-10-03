@@ -148,6 +148,7 @@ class Page:
     emails: List[str]
     phones: List[str]
     fetched_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    next_url: Optional[str] = None  # "next page" of a paginated list on the same site
 
 
 def _jsonld_objects(soup: BeautifulSoup) -> List[Dict[str, Any]]:
@@ -170,9 +171,32 @@ def _jsonld_objects(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     return objects
 
 
+NEXT_LABELS = {"next", "next page", "next ›", "next »", "next >", "next →", "›", "»"}
+
+
+def _next_page_url(soup: BeautifulSoup, url: str) -> Optional[str]:
+    """Find the link to the next page of a paginated list (rel=next, or a 'Next' link) on the same site."""
+    candidates = []
+    rel_next = soup.find(["link", "a"], rel="next", href=True)
+    if rel_next is not None:
+        candidates.append(rel_next.get("href"))
+    for anchor in soup.find_all("a", href=True):
+        label = " ".join(anchor.get_text(" ", strip=True).split()).lower()
+        aria = str(anchor.get("aria-label") or "").strip().lower()
+        if label in NEXT_LABELS or aria.startswith("next"):
+            candidates.append(anchor.get("href"))
+    current = url.split("#", 1)[0]
+    for href in candidates:
+        absolute = safe_url(urljoin(url, str(href or "").strip()))
+        if absolute and host_of(absolute) == host_of(url) and absolute.split("#", 1)[0] != current:
+            return absolute
+    return None
+
+
 def parse_page(url: str, body: str) -> Page:
     soup = BeautifulSoup(body, "html.parser")
     jsonld = _jsonld_objects(soup)
+    next_url = _next_page_url(soup, url)
     title = clean_text(soup.title.get_text(" ", strip=True) if soup.title else "", 200)
     mailtos, tels, links, seen = [], [], [], set()
     for anchor in soup.find_all("a", href=True):
@@ -205,7 +229,7 @@ def parse_page(url: str, body: str) -> Page:
                 tels.append(phone)
     emails = extract_emails(" ".join(mailtos + [text]), 10)
     return Page(url=url, title=title, text=text, links=links, jsonld=jsonld, emails=emails,
-                phones=list(dict.fromkeys(tels))[:5])
+                phones=list(dict.fromkeys(tels))[:5], next_url=next_url)
 
 
 async def load_page(fetcher: PageFetcher, url: str) -> Tuple[Optional[Page], str]:
@@ -233,17 +257,30 @@ For each result choose an action:
 Return JSON: {{"decisions": [{{"i": <index>, "action": "open"|"entity"|"skip"}}]}} covering every index."""
 
 
+TRIAGE_BATCH = 40  # Deep reviews up to 160 results: split them so no reply gets cut off
+
+
 async def triage_results(results: List[Dict[str, Any]], plan: Dict[str, Any]) -> Dict[int, str]:
     if not results:
         return {}
-    items = [{"i": i, "title": clean_text(r.get("title"), 140), "url": r.get("url"),
-              "snippet": clean_text(r.get("snippet"), 220)} for i, r in enumerate(results)]
-    data = await chat_json(TRIAGE_PROMPT.format(brief=plan_brief(plan), entity=plan["entity"]),
-                           "RESULTS:\n" + json.dumps(items, ensure_ascii=False), max_tokens=2500, timeout=45)
+    system = TRIAGE_PROMPT.format(brief=plan_brief(plan), entity=plan["entity"])
+
+    async def batch(offset: int) -> Dict[int, str]:
+        chunk = results[offset: offset + TRIAGE_BATCH]
+        items = [{"i": offset + j, "title": clean_text(r.get("title"), 140), "url": r.get("url"),
+                  "snippet": clean_text(r.get("snippet"), 220)} for j, r in enumerate(chunk)]
+        data = await chat_json(system, "RESULTS:\n" + json.dumps(items, ensure_ascii=False), max_tokens=1800,
+                               timeout=45)
+        out: Dict[int, str] = {}
+        for row in (data or {}).get("decisions", []) if isinstance(data, dict) else []:
+            if (isinstance(row, dict) and isinstance(row.get("i"), int) and offset <= row["i"] < offset + len(chunk)
+                    and row.get("action") in ("open", "entity", "skip")):
+                out[row["i"]] = row["action"]
+        return out
+
     decisions: Dict[int, str] = {}
-    for row in (data or {}).get("decisions", []) if isinstance(data, dict) else []:
-        if isinstance(row, dict) and isinstance(row.get("i"), int) and row.get("action") in ("open", "entity", "skip"):
-            decisions[row["i"]] = row["action"]
+    for part in await asyncio.gather(*(batch(o) for o in range(0, len(results), TRIAGE_BATCH))):
+        decisions.update(part)
     return decisions
 
 

@@ -1,7 +1,7 @@
 export type Mode = "Fast" | "Balanced" | "Deep";
 export type Country = "IN" | "US" | "EU";
 export type Intent = "people" | "jobs" | "companies" | "local_businesses" | "events" | "news" | "market" | "other";
-export type Tab = "home" | "datasets" | "leads" | "history" | "settings";
+export type Tab = "home" | "datasets" | "leads" | "history" | "credits" | "settings";
 
 export const COUNTRIES: { code: Country; label: string }[] = [
   { code: "IN", label: "India" },
@@ -27,8 +27,58 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  credits: number;
   created_at?: string | null;
 }
+
+// ---------------------------------------------------------------- credits (same numbers as backend/app/credits.py)
+/** What one search costs, by depth. */
+export const MODE_CREDITS: Record<Mode, number> = { Fast: 1, Balanced: 2, Deep: 4 };
+/** Free credits every new account starts with (given once, at sign-up). */
+export const SIGNUP_CREDITS = 10;
+
+export interface CreditPack {
+  id: string;
+  credits: number;
+  price_inr: number;
+}
+
+/** Shown until the server's list arrives; buying always goes through the server's packs. */
+export const CREDIT_PACKS: CreditPack[] = [
+  { id: "pack_10", credits: 10, price_inr: 50 },
+  { id: "pack_100", credits: 100, price_inr: 500 },
+  { id: "pack_500", credits: 500, price_inr: 2500 },
+];
+
+export interface CreditTransaction {
+  id: string;
+  delta: number;
+  balance_after?: number | null;
+  reason: string; // signup | purchase | run | refund
+  description?: string | null;
+  run_id?: string | null;
+  pack_id?: string | null;
+  amount_inr?: number | null;
+  created_at?: string | null;
+}
+
+/** GET /api/credits */
+export interface CreditsInfo {
+  balance: number;
+  costs: Record<string, number>;
+  packs: CreditPack[];
+  signup_credits: number;
+  history: CreditTransaction[]; // newest first
+}
+
+export const creditsText = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
+
+const INR = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+/** "₹2,500" */
+export const rupees = (n: number) => `₹${INR.format(n)}`;
+
+/** Runs without a mode count as Balanced, like on the server. */
+export const modeOf = (mode?: string | null): Mode => (mode === "Fast" || mode === "Deep" ? mode : "Balanced");
 
 export interface Place {
   city?: string | null;
@@ -104,6 +154,8 @@ export interface WorkflowRun {
   message?: string | null;
   spec: RunSpec;
   stats: RunStats;
+  credits_charged?: number | null;
+  credits_refunded?: number | null; // set when a failed run gave its credits back
   created_at?: string | null;
   updated_at?: string | null;
   finished_at?: string | null;
@@ -195,6 +247,9 @@ export const TERMINAL_STATUSES = ["completed", "failed", "cancelled"];
 export const isTerminal = (status?: string | null) => !!status && TERMINAL_STATUSES.includes(status);
 
 export const resultCount = (run: WorkflowRun) => run.stats?.coverage?.total ?? run.stats?.deduplicated_count ?? 0;
+
+/** Credits a run was charged (runs from before credits existed show what their mode costs). */
+export const runCost = (run: WorkflowRun) => run.credits_charged ?? MODE_CREDITS[modeOf(run.mode)];
 
 /** "backend developers in Odisha" - written by the AI; derived from "Understood as" for older runs. */
 function resultPhrase(spec?: RunSpec): string {

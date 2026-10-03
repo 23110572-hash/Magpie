@@ -15,7 +15,10 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from sqlalchemy import text
+
 from app.catalog import SOURCES
+from app.credits import refund_note, refund_run
 from app.database import SessionLocal
 from app.models import DataRecord, Dataset, WorkflowRun
 from app.services import searcher
@@ -32,12 +35,21 @@ logger = logging.getLogger("magpie.pipeline")
 
 Broadcast = Callable[[Dict[str, Any]], Awaitable[None]]
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
-ETA_DEFAULTS = {"Fast": 35, "Balanced": 80, "Deep": 160}
-PIPELINE_TIMEOUT_SECONDS = 600
+ETA_DEFAULTS = {"Fast": 40, "Balanced": 90, "Deep": 210}
+PIPELINE_TIMEOUTS = {"Fast": 300, "Balanced": 480, "Deep": 900}
+FETCH_CONCURRENCY = {"Fast": 6, "Balanced": 6, "Deep": 10}
+HEARTBEAT_SECONDS = 45
+SHUTTING_DOWN = False
 
 
 class PipelineError(Exception):
     pass
+
+
+def begin_shutdown() -> None:
+    """Called when the server stops: runs cut off now are failed and refunded instead of "cancelled by you"."""
+    global SHUTTING_DOWN
+    SHUTTING_DOWN = True
 
 
 def _utcnow() -> datetime:
@@ -51,7 +63,33 @@ def _persist_run(run_id: str, fields: Dict[str, Any]) -> None:
             return
         for key, value in fields.items():
             setattr(run, key, value)
+        run.updated_at = _utcnow()  # heartbeat for the stale-run sweeper
         db.commit()
+
+
+def _touch_run(run_id: str) -> None:
+    with SessionLocal() as db:
+        db.execute(text("UPDATE workflow_runs SET updated_at = now() WHERE id = :rid AND status IN ('pending', 'running')"),
+                   {"rid": run_id})
+        db.commit()
+
+
+async def _heartbeat(run_id: str) -> None:
+    """Long AI steps can go quiet for minutes; this tells other servers the run is still alive."""
+    while True:
+        await asyncio.sleep(HEARTBEAT_SECONDS)
+        try:
+            await asyncio.to_thread(_touch_run, run_id)
+        except Exception as exc:
+            logger.warning("Heartbeat for run %s failed: %s", run_id, exc)
+
+
+async def _refund(run_id: str, note: str) -> int:
+    try:
+        return await asyncio.to_thread(refund_run, run_id, note)
+    except Exception:  # the sweeper retries refunds that did not go through
+        logger.exception("Refund failed for run %s", run_id)
+        return 0
 
 
 def _store_dataset(run_id: str, user_id: Optional[str], plan: Dict[str, Any], records: List[Dict[str, Any]],
@@ -179,25 +217,37 @@ async def run_pipeline_orchestrator(run_id: str, user_id: Optional[str], prompt:
                                     status_callback: Optional[Broadcast] = None) -> None:
     tracker = RunTracker(run_id, prompt, mode, country, status_callback)
     http = searcher.HttpClient(concurrency=10)
-    fetcher = PageFetcher(concurrency=6)
+    fetcher = PageFetcher(concurrency=FETCH_CONCURRENCY.get(mode, 6))
     stats: Dict[str, Any] = {"sources": {}}
     usage = new_usage()
     token = USAGE.set(usage)
+    heartbeat = asyncio.create_task(_heartbeat(run_id))
+    timeout = PIPELINE_TIMEOUTS.get(mode, 480)
+    # Credits rule: a failed search is refunded; a cancelled one (by the user) is not.
     try:
-        async with asyncio.timeout(PIPELINE_TIMEOUT_SECONDS):
+        async with asyncio.timeout(timeout):
             await _execute(tracker, http, fetcher, stats, run_id, user_id, prompt, mode, country, forced_intent)
     except asyncio.CancelledError:
         stats["llm"], stats["duration_seconds"] = dict(usage), round(time.monotonic() - tracker.started, 1)
-        await tracker.update(status="cancelled", step="cancelled", message="Cancelled by you.", stats=stats)
+        if SHUTTING_DOWN:
+            note = refund_note(await _refund(run_id, "the search was interrupted"))
+            await tracker.update(status="failed", step="failed", stats=stats,
+                                 message="Interrupted: the server restarted during this search." + note)
+        else:
+            await tracker.update(status="cancelled", step="cancelled", message="Cancelled by you.", stats=stats)
     except TimeoutError:
-        stats["error"] = f"Timed out after {PIPELINE_TIMEOUT_SECONDS}s"
+        stats["error"] = f"Timed out after {timeout // 60} minutes"
         stats["llm"] = dict(usage)
-        await tracker.update(status="failed", step="failed", message=stats["error"], stats=stats)
+        note = refund_note(await _refund(run_id, "the search timed out"))
+        await tracker.update(status="failed", step="failed", message=f"{stats['error']}.{note}", stats=stats)
     except Exception as exc:
         logger.exception("Pipeline error for run %s", run_id)
         stats["error"], stats["llm"] = str(exc)[:500], dict(usage)
-        await tracker.update(status="failed", step="failed", message=f"Run failed: {exc}", stats=stats)
+        note = refund_note(await _refund(run_id, "the search failed"))
+        await tracker.update(status="failed", step="failed", stats=stats,
+                             message=f"Run failed: {str(exc).rstrip('.') or exc.__class__.__name__}.{note}")
     finally:
+        heartbeat.cancel()
         USAGE.reset(token)
         await http.aclose()
         await fetcher.aclose()
@@ -243,7 +293,7 @@ async def _execute(tracker: RunTracker, http: searcher.HttpClient, fetcher: Page
         if key and key not in seen:
             seen.add(key)
             unique.append(result)
-    unique = unique[:60]
+    unique = unique[: limits["triage_cap"]]
     await tracker.update(step="reading", progress=46, stats=stats,
                          message=f"AI is deciding which of {len(unique)} web results to read…")
     decisions = await triage_results(unique, plan)
@@ -258,6 +308,8 @@ async def _execute(tracker: RunTracker, http: searcher.HttpClient, fetcher: Page
             to_open.append(result)
     to_open = to_open[: limits["pages"]]
     page_stats = Counter()
+    visited = {canonical_url(r["url"]) for r in to_open}
+    next_budget = [limits["next_pages"]]  # Deep also reads page 2 of the lists that turned out useful
 
     async def read(result: Dict[str, Any]) -> List[Dict[str, Any]]:
         page, status = await load_page(fetcher, result["url"])
@@ -265,6 +317,14 @@ async def _execute(tracker: RunTracker, http: searcher.HttpClient, fetcher: Page
         if not page:
             return []
         rows = await extract_from_page(page, plan, result)
+        if rows and page.next_url and next_budget[0] > 0 and canonical_url(page.next_url) not in visited:
+            visited.add(canonical_url(page.next_url))
+            next_budget[0] -= 1  # no await between the check and this line, so the budget is never exceeded
+            following, next_status = await load_page(fetcher, page.next_url)
+            page_stats[next_status] += 1
+            if following:
+                rows += await extract_from_page(following, plan, result)
+                page_stats["next"] += 1
         page_stats["entries"] += len(rows)
         return rows
 
@@ -278,6 +338,7 @@ async def _execute(tracker: RunTracker, http: searcher.HttpClient, fetcher: Page
         await _gather_with_progress([("page", host_of(r["url"]), read(r)) for r in to_open], on_read)
     stats["triage"] = dict(counts)
     stats["pages"] = {"opened": len(to_open), "read": page_stats["ok"], "entries": page_stats["entries"],
+                      "next_pages": page_stats["next"],
                       "blocked": page_stats["blocked_robots"] + page_stats["not_allowed"],
                       "failed": page_stats["error"] + page_stats["unsafe"]}
 

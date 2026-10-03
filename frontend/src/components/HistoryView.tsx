@@ -1,7 +1,7 @@
 import React from "react";
-import { ArrowRight, Ban, Clock, Database, History as HistoryIcon, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowRight, Ban, Clock, Coins, Database, History as HistoryIcon, RotateCcw, Trash2 } from "lucide-react";
 import type { WorkflowRun } from "@/types";
-import { countryLabel, intentLabel, isTerminal } from "@/types";
+import { countryLabel, creditsText, intentLabel, isTerminal, runCost } from "@/types";
 import { formatDateTime, formatDuration, timeAgo } from "@/lib/format";
 
 interface HistoryViewProps {
@@ -54,6 +54,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ runs, datasetIds, onOp
                   <span className="flex items-center gap-1" title={formatDateTime(run.created_at)}><Clock className="w-4 h-4" />{timeAgo(run.created_at)}</span>
                   <span>{countryLabel(run.country)}</span>
                   <span>{run.mode || "Balanced"}</span>
+                  <span className="flex items-center gap-1"><Coins className="w-4 h-4" aria-hidden="true" />{creditsText(runCost(run))}</span>
+                  {run.credits_refunded ? (
+                    <span className="badge bg-emerald-50 text-emerald-700 border-emerald-200" title={`${creditsText(run.credits_refunded)} given back`}>
+                      Refunded
+                    </span>
+                  ) : null}
                   {run.spec?.intent && <span className="badge bg-blue-50 text-blue-700 border-blue-200">{intentLabel(run.spec.intent)}</span>}
                   {run.status === "completed" && coverage && (
                     <span>{coverage.total} rows · {coverage.with_email} e-mails · {coverage.with_phone} phones{stats.duration_seconds ? ` · ${formatDuration(stats.duration_seconds)}` : ""}</span>

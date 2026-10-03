@@ -23,6 +23,7 @@ class User(Base):
     name = Column(String(120), nullable=False)
     password_hash = Column(Text, nullable=False)
     token_version = Column(Integer, nullable=False, default=0)  # bump to sign out everywhere
+    credits = Column(Integer, nullable=True, default=0)  # NULL only for accounts created before credits existed
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
@@ -44,8 +45,10 @@ class WorkflowRun(Base):
     message = Column(Text, nullable=True)
     spec = Column(JSON, default=dict)
     stats = Column(JSON, default=dict)
+    credits_charged = Column(Integer, nullable=True)
+    credits_refunded = Column(Integer, nullable=True)  # set once, when a failed run gives its credits back
     created_at = Column(DateTime(timezone=True), default=utc_now, index=True)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)  # doubles as the heartbeat
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
     datasets = relationship("Dataset", back_populates="run", cascade="all, delete-orphan", passive_deletes=True)
@@ -115,3 +118,19 @@ class LeadOutreach(Base):
     message_id = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     sent_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class CreditTransaction(Base):
+    """Every change to a user's credit balance (welcome credits, purchases, runs, refunds)."""
+    __tablename__ = "credit_transactions"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    delta = Column(Integer, nullable=False)
+    balance_after = Column(Integer, nullable=True)
+    reason = Column(String(16), nullable=False)  # signup | purchase | run | refund
+    description = Column(Text, nullable=True)
+    run_id = Column(String, nullable=True, index=True)
+    pack_id = Column(String(32), nullable=True)
+    amount_inr = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, index=True)

@@ -70,7 +70,13 @@ class UserSchema(ORMModel):
     id: str
     email: str
     name: str
+    credits: int = 0
     created_at: UtcDatetime = None
+
+    @field_validator("credits", mode="before")
+    @classmethod
+    def _credits(cls, value: Any) -> Any:
+        return value or 0
 
 
 class AuthResponse(BaseModel):
@@ -97,6 +103,23 @@ class PasswordChange(BaseModel):
 
 class AccountDelete(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
+
+
+# ---------------------------------------------------------------- credits
+class BuyCreditsRequest(BaseModel):
+    pack_id: str = Field(..., min_length=1, max_length=32)
+
+
+class CreditTransactionSchema(ORMModel):
+    id: str
+    delta: int
+    balance_after: Optional[int] = None
+    reason: str
+    description: Optional[str] = None
+    run_id: Optional[str] = None
+    pack_id: Optional[str] = None
+    amount_inr: Optional[int] = None
+    created_at: UtcDatetime = None
 
 
 # ---------------------------------------------------------------- runs
@@ -132,6 +155,8 @@ class WorkflowRunSchema(ORMModel):
     message: Optional[str] = None
     spec: Dict[str, Any] = {}
     stats: Dict[str, Any] = {}
+    credits_charged: Optional[int] = None
+    credits_refunded: Optional[int] = None
     created_at: UtcDatetime = None
     updated_at: UtcDatetime = None
     finished_at: UtcDatetime = None

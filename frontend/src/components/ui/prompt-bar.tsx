@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Check, ChevronDown, Globe, Lightbulb, Loader2, Mic, Scale, Zap, type LucideIcon } from "lucide-react";
-import { COUNTRIES, type Country, type Mode } from "@/types";
+import { COUNTRIES, MODE_CREDITS, creditsText, type Country, type Mode } from "@/types";
 
 export interface PromptBarProps {
   /** Resolve to false when the request could not start, so the text is put back in the box. */
   onSubmit: (value: string, mode: Mode, country: Country) => Promise<boolean> | boolean | void;
   isLoading?: boolean;
+  /** Show what each depth costs (signed-in users). */
+  showCredits?: boolean;
+  /** Request to start with, e.g. one that could not start right after signing in. */
+  initial?: { prompt: string; mode: Mode } | null;
 }
 
 const MODES: { id: Mode; icon: LucideIcon; label: string; hint: string }[] = [
-  { id: "Fast", icon: Zap, label: "Fast", hint: "Quick scan, fewer pages (~30s)" },
-  { id: "Balanced", icon: Scale, label: "Balanced", hint: "Reads pages & finds contacts (~1-2 min)" },
-  { id: "Deep", icon: Lightbulb, label: "Deep", hint: "More queries, cities and pages (~3 min)" },
+  { id: "Fast", icon: Zap, label: "Fast", hint: "Quick scan of the top results · ~40 s" },
+  { id: "Balanced", icon: Scale, label: "Balanced", hint: "Reads lists and finds contacts · ~1.5 min" },
+  { id: "Deep", icon: Lightbulb, label: "Deep", hint: "8 searches, more cities, pages and contacts · ~3-4 min" },
 ];
 
 const SUGGESTIONS = [
@@ -44,10 +48,10 @@ function initialCountry(): Country {
   return "IN";
 }
 
-export default function PromptBar({ onSubmit, isLoading = false }: PromptBarProps) {
-  const [value, setValue] = useState("");
+export default function PromptBar({ onSubmit, isLoading = false, showCredits = false, initial = null }: PromptBarProps) {
+  const [value, setValue] = useState(initial?.prompt ?? "");
   const [open, setOpen] = useState<"mode" | "country" | null>(null);
-  const [mode, setMode] = useState<Mode>("Balanced");
+  const [mode, setMode] = useState<Mode>(initial?.mode ?? "Balanced");
   const [country, setCountry] = useState<Country>(initialCountry);
   const [recording, setRecording] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
@@ -149,7 +153,7 @@ export default function PromptBar({ onSubmit, isLoading = false }: PromptBarProp
           className="mb-3 w-full resize-none bg-transparent text-lg sm:text-xl text-slate-900 placeholder:text-slate-400 focus:outline-none leading-relaxed" />
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Country */}
             <div className="relative">
               <button type="button" aria-haspopup="listbox" aria-expanded={open === "country"}
@@ -177,7 +181,9 @@ export default function PromptBar({ onSubmit, isLoading = false }: PromptBarProp
               <button type="button" aria-haspopup="listbox" aria-expanded={open === "mode"}
                 onClick={() => setOpen(open === "mode" ? null : "mode")}
                 className="flex items-center gap-2 rounded-xl bg-slate-100 px-3.5 py-2 text-sm font-semibold text-slate-800 border border-slate-200 hover:bg-slate-200/70">
-                <ModeIcon className="w-4 h-4 text-blue-600" /> {mode} <ChevronDown className="w-4 h-4 text-slate-500" />
+                <ModeIcon className="w-4 h-4 text-blue-600" /> {mode}
+                {showCredits && <span className="text-xs font-medium text-slate-500">· {creditsText(MODE_CREDITS[mode])}</span>}
+                <ChevronDown className="w-4 h-4 text-slate-500" />
               </button>
               {open === "mode" && (
                 <div role="listbox" aria-label="Depth" className="absolute left-0 bottom-14 z-50 w-80 card p-1.5 shadow-2xl">
@@ -191,8 +197,11 @@ export default function PromptBar({ onSubmit, isLoading = false }: PromptBarProp
                         id === mode ? "bg-blue-50 text-blue-800" : "text-slate-700 hover:bg-slate-50"
                       }`}>
                       <Icon className="w-4 h-4 mt-1" />
-                      <span>
-                        <span className="block text-sm font-semibold">{label}</span>
+                      <span className="flex-1">
+                        <span className="flex items-baseline justify-between gap-2">
+                          <span className="text-sm font-semibold">{label}</span>
+                          {showCredits && <span className="text-xs font-semibold text-slate-500">{creditsText(MODE_CREDITS[id])}</span>}
+                        </span>
                         <span className="block text-xs text-slate-500">{hint}</span>
                       </span>
                     </button>

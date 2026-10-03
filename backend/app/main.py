@@ -5,28 +5,33 @@ import json
 import logging
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import delete, func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import CurrentUser, create_token, get_current_user, hash_password, invalidate_user_cache, verify_password
 from app.catalog import INTENT_LABELS, MARKETS, SOURCES
 from app.config import settings
+from app.credits import (
+    MODE_COSTS, PACKS, PACKS_BY_ID, SIGNUP_CREDITS, InsufficientCredits, backfill_signup_credits, balance_of, cost_of,
+    credits_text, grant, refund_note, refund_run, spend,
+)
 from app.database import SessionLocal, get_db, init_db
-from app.models import DataRecord, Dataset, LeadOutreach, User, WorkflowRun
+from app.models import CreditTransaction, DataRecord, Dataset, LeadOutreach, User, WorkflowRun
 from app.schemas import (
-    AccountDelete, AuthResponse, DatasetSchema, DraftRequest, LeadSchema, LeadSendRequest, LeadsFromRecordsRequest,
-    LeadUpdateRequest, LoginRequest, PasswordChange, ProfileUpdate, RecordDetailSchema, RecordSchema, RegisterRequest,
-    RerunRequest, RunCreateRequest, UserSchema, WorkflowRunSchema,
+    AccountDelete, AuthResponse, BuyCreditsRequest, CreditTransactionSchema, DatasetSchema, DraftRequest, LeadSchema,
+    LeadSendRequest, LeadsFromRecordsRequest, LeadUpdateRequest, LoginRequest, PasswordChange, ProfileUpdate,
+    RecordDetailSchema, RecordSchema, RegisterRequest, RerunRequest, RunCreateRequest, UserSchema, WorkflowRunSchema,
 )
 from app.services.llm import chat_json
 from app.services.mailer import DEFAULT_BODY, DEFAULT_SUBJECT, deliver, render_template, with_footer
-from app.services.orchestrator import TERMINAL_STATUSES, run_pipeline_orchestrator
+from app.services.orchestrator import TERMINAL_STATUSES, begin_shutdown, run_pipeline_orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -41,23 +46,63 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _recover_interrupted_runs() -> int:
+STALE_RUN_SECONDS = 180  # a live run writes a heartbeat at least every 45 s
+SWEEP_EVERY_SECONDS = 60
+
+
+def recover_stale_runs(exclude: set) -> int:
+    """Fail runs that stopped reporting (the server restarted mid-run) and refund their credits.
+
+    Runs owned by this process are excluded, and a run only counts as stale after several missed heartbeats, so
+    servers sharing one database (e.g. Render and a local copy) never fail each other's live runs."""
+    cutoff = _utcnow() - timedelta(seconds=STALE_RUN_SECONDS)
     with SessionLocal() as db:
-        stale = db.query(WorkflowRun).filter(WorkflowRun.status.in_(["pending", "running"])).all()
+        stale = (db.query(WorkflowRun)
+                 .filter(WorkflowRun.status.in_(["pending", "running"]), WorkflowRun.updated_at < cutoff).all())
+        interrupted: List[str] = []
         for run in stale:
+            if run.id in exclude:
+                continue
             run.status, run.step, run.eta_seconds, run.finished_at = "failed", "failed", 0, _utcnow()
             run.message = "Interrupted: the server restarted during this run. Run it again from History."
+            interrupted.append(run.id)
         db.commit()
-        return len(stale)
+        # Failed runs whose refund did not go through at the time (e.g. a database hiccup).
+        unrefunded = [rid for (rid,) in db.query(WorkflowRun.id).filter(
+            WorkflowRun.status == "failed", WorkflowRun.credits_charged > 0,
+            WorkflowRun.credits_refunded.is_(None)).all()]
+    for run_id in dict.fromkeys(interrupted + unrefunded):
+        amount = refund_run(run_id, "the search was interrupted" if run_id in interrupted else "the search failed")
+        if amount and run_id in interrupted:
+            with SessionLocal() as db:
+                run = db.get(WorkflowRun, run_id)
+                if run is not None:
+                    run.message = (run.message or "") + refund_note(amount)
+                    db.commit()
+    return len(interrupted)
+
+
+async def _sweep_stale_runs() -> None:
+    while True:
+        try:
+            recovered = await asyncio.to_thread(recover_stale_runs, set(RUNNING_TASKS))
+            if recovered:
+                logger.info("Marked %s interrupted run(s) as failed", recovered)
+        except Exception:
+            logger.exception("Stale-run sweep failed")
+        await asyncio.sleep(SWEEP_EVERY_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     await asyncio.to_thread(init_db)
-    recovered = await asyncio.to_thread(_recover_interrupted_runs)
-    if recovered:
-        logger.info("Marked %s interrupted run(s) as failed", recovered)
+    granted = await asyncio.to_thread(backfill_signup_credits)
+    if granted:
+        logger.info("Gave welcome credits to %s existing account(s)", granted)
+    sweeper = asyncio.create_task(_sweep_stale_runs())
     yield
+    sweeper.cancel()
+    begin_shutdown()  # runs cut off by this shutdown are failed and refunded, not "cancelled by you"
     for task in list(RUNNING_TASKS.values()):
         task.cancel()
     if RUNNING_TASKS:
@@ -91,7 +136,8 @@ def health_check(db: Session = Depends(get_db)):
 @app.get("/api/config")
 def public_config():
     return {"version": app.version, "countries": [{"code": k, "label": v["label"]} for k, v in MARKETS.items()],
-            "modes": ["Fast", "Balanced", "Deep"], "intents": INTENT_LABELS}
+            "modes": ["Fast", "Balanced", "Deep"], "intents": INTENT_LABELS, "credit_costs": MODE_COSTS,
+            "signup_credits": SIGNUP_CREDITS, "credit_packs": PACKS}
 
 
 @app.get("/api/status")
@@ -115,10 +161,19 @@ def _auth_payload(user: User) -> Dict[str, Any]:
 
 @app.post("/api/auth/register", status_code=201)
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    taken = HTTPException(status_code=409, detail="An account with this e-mail already exists. Sign in instead.")
     if db.query(User).filter(User.email == req.email).first():
-        raise HTTPException(status_code=409, detail="An account with this e-mail already exists. Sign in instead.")
-    user = User(email=req.email, name=req.name, password_hash=hash_password(req.password), last_login_at=_utcnow())
+        raise taken
+    user = User(email=req.email, name=req.name, password_hash=hash_password(req.password), last_login_at=_utcnow(),
+                credits=SIGNUP_CREDITS)
     db.add(user)
+    try:
+        db.flush()
+    except IntegrityError:  # the same e-mail registered a moment ago in another request
+        db.rollback()
+        raise taken
+    db.add(CreditTransaction(user_id=user.id, delta=SIGNUP_CREDITS, balance_after=SIGNUP_CREDITS, reason="signup",
+                             description="Welcome credits"))
     db.commit()
     db.refresh(user)
     return _auth_payload(user)
@@ -189,6 +244,28 @@ async def delete_account(req: AccountDelete, user: CurrentUser = Depends(get_cur
     return Response(status_code=204)
 
 
+# ---------------------------------------------------------------- credits
+@app.get("/api/credits")
+def get_credits(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    history = (db.query(CreditTransaction).filter(CreditTransaction.user_id == user.id)
+               .order_by(CreditTransaction.created_at.desc(), CreditTransaction.id.desc()).limit(50).all())
+    return {"balance": balance_of(db, user.id), "costs": MODE_COSTS, "packs": PACKS, "signup_credits": SIGNUP_CREDITS,
+            "history": [CreditTransactionSchema.model_validate(t).model_dump(mode="json") for t in history]}
+
+
+@app.post("/api/credits/buy")
+def buy_credits(req: BuyCreditsRequest, user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    """MVP: the pack is added straight away - no payment provider is connected yet."""
+    pack = PACKS_BY_ID.get(req.pack_id)
+    if pack is None:
+        raise HTTPException(status_code=400, detail="Unknown credit pack.")
+    balance = grant(db, user.id, pack["credits"], "purchase",
+                    f"Bought {credits_text(pack['credits'])} for ₹{pack['price_inr']:,}",
+                    pack_id=pack["id"], amount_inr=pack["price_inr"])
+    db.commit()
+    return {"balance": balance, "added": pack["credits"]}
+
+
 # ---------------------------------------------------------------- live updates
 async def broadcast_status(state: Dict[str, Any]) -> None:
     run_id = state["run_id"]
@@ -219,10 +296,19 @@ def _own_run(db: Session, run_id: str, user: CurrentUser) -> WorkflowRun:
 # ---------------------------------------------------------------- runs
 @app.post("/api/runs", response_model=WorkflowRunSchema, status_code=201)
 async def create_run(req: RunCreateRequest, user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    cost = cost_of(req.mode)
     run = WorkflowRun(user_id=user.id, prompt=req.prompt, mode=req.mode, country=req.country,
                       intent_override=req.intent, status="running", step="planning", progress=1.0, eta_seconds=0,
-                      message="Starting…", spec={}, stats={})
+                      message="Starting…", spec={}, stats={}, credits_charged=cost)
     db.add(run)
+    db.flush()
+    try:  # the run and its charge are saved together, or not at all
+        spend(db, user.id, cost, f"{req.mode} search: {req.prompt[:80]}", run_id=run.id)
+    except InsufficientCredits as exc:
+        db.rollback()
+        raise HTTPException(status_code=402, detail=(
+            f"A {req.mode} search needs {credits_text(cost)}, but you have {exc.balance}. "
+            "Buy more on the Credits page."))
     db.commit()
     db.refresh(run)
     _spawn_run(run)

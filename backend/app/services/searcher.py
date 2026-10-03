@@ -116,21 +116,26 @@ async def serper_web(http: HttpClient, plan: Dict[str, Any]) -> List[Dict[str, A
         return []
     limits, gl = plan["limits"], plan["search"]["gl"]
 
-    async def one(query: str) -> List[Dict[str, Any]]:
+    async def one(query: str, page: int) -> List[Dict[str, Any]]:
         body: Dict[str, Any] = {"q": query, "num": limits["serp_results"], "hl": "en"}
         if gl:
             body["gl"] = gl
+        if page > 1:  # Deep also reads Google's second results page
+            body["page"] = page
         data = await http.json("POST", "https://google.serper.dev/search", json_body=body,
                                headers=_serper_headers(), cache_ttl=1800)
+        offset = (page - 1) * limits["serp_results"]
         rows = []
         for pos, item in enumerate((data or {}).get("organic", []), 1):
             if item.get("link"):
                 rows.append({"title": item.get("title"), "url": item.get("link"), "snippet": item.get("snippet"),
-                             "date": item.get("date"), "engine": "Google search", "query": query, "position": pos,
-                             "raw": item})
+                             "date": item.get("date"), "engine": "Google search", "query": query,
+                             "position": offset + pos, "raw": item})
         return rows
 
-    batches = await asyncio.gather(*(one(q) for q in plan["queries"]["web"][: limits["web_queries"]]))
+    queries = plan["queries"]["web"][: limits["web_queries"]]
+    pages = range(1, limits["serp_pages"] + 1)
+    batches = await asyncio.gather(*(one(q, p) for q in queries for p in pages))
     return [row for rows in batches for row in rows]
 
 
@@ -141,7 +146,8 @@ async def tavily_search(http: HttpClient, plan: Dict[str, Any]) -> List[Dict[str
     headers = {"Authorization": f"Bearer {settings.TAVILY_API_KEY}", "Content-Type": "application/json"}
     topic = "news" if plan["intent"] == "news" else "general"
     recency = plan["filters"].get("recency_days")
-    queries = [q for q in plan["queries"]["web"] if "site:" not in q][:2] or [plan["corrected_prompt"]]
+    queries = ([q for q in plan["queries"]["web"] if "site:" not in q][: limits["tavily_queries"]]
+               or [plan["corrected_prompt"]])
 
     async def one(query: str) -> List[Dict[str, Any]]:
         body: Dict[str, Any] = {"query": query[:380], "max_results": limits["tavily_results"], "topic": topic,
@@ -194,6 +200,8 @@ async def serper_places(http: HttpClient, plan: Dict[str, Any]) -> List[Dict[str
             searches += [query if city.lower() in query.lower() else f"{query} in {city}" for city in cities]
         else:
             searches.append(query)
+    # Country-wide Deep searches would multiply to 4 queries x 8 cities x 2 pages; cap the Maps calls per run.
+    searches = list(dict.fromkeys(searches))[: max(1, limits["places_calls"] // limits["places_pages"])]
 
     async def one(query: str, page: int) -> List[Dict[str, Any]]:
         body: Dict[str, Any] = {"q": query, "hl": "en"}
@@ -260,26 +268,29 @@ async def github_users(http: HttpClient, plan: Dict[str, Any]) -> List[Dict[str,
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     if settings.GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {settings.GITHUB_TOKEN}"
+    spread = limits["github_locations"]
     if place.get("city"):
-        locations = [place["city"]] + [a for a in (place.get("aliases") or [])[:1] if a.lower() != place["city"].lower()]
+        aliases = [a for a in (place.get("aliases") or []) if a.lower() != place["city"].lower()]
+        locations = [place["city"]] + aliases[: max(1, spread - 1)]
     elif place.get("region"):
-        locations = [place["region"]]
+        locations = [place["region"]] + list(plan["cover_cities"][: max(0, spread - 1)])
     else:
-        locations = list(plan["cover_cities"][:3]) + [place.get("country") or ""]
-    locations = [loc for loc in dict.fromkeys(locations) if loc and loc.lower() not in ("europe", "remote")][:4]
+        locations = list(plan["cover_cities"][: max(1, spread - 1)]) + [place.get("country") or ""]
+    locations = [loc for loc in dict.fromkeys(locations) if loc and loc.lower() not in ("europe", "remote")][:spread]
     languages = plan["queries"]["github_languages"][:2] or [""]
     if not locations:
         return []
+    per_page = min(100, max(30, limits["github_profiles"]))  # one GitHub search returns at most 100 people
 
     async def search(location: str, language: str) -> List[str]:
         q = f'location:"{location}" type:user' + (f' language:"{language}"' if language else "")
         data = await http.json("GET", "https://api.github.com/search/users", headers=headers, cache_ttl=3600,
-                               params={"q": q, "sort": "followers", "order": "desc", "per_page": 30})
+                               params={"q": q, "sort": "followers", "order": "desc", "per_page": per_page})
         return [item["login"] for item in (data or {}).get("items", []) if item.get("login")]
 
     found = await asyncio.gather(*(search(loc, lang) for loc in locations for lang in languages))
     logins: List[str] = []
-    for position in range(30):  # interleave so every location/language contributes
+    for position in range(per_page):  # interleave so every location/language contributes
         for batch in found:
             if position < len(batch) and batch[position] not in logins:
                 logins.append(batch[position])
@@ -323,25 +334,32 @@ async def adzuna_jobs(http: HttpClient, plan: Dict[str, Any]) -> List[Dict[str, 
 
     async def one(country: str) -> List[Dict[str, Any]]:
         words = _plain_query(_job_terms(plan)).split()
+        per_page = limits["adzuna_per_page"]
+        base = f"https://api.adzuna.com/v1/api/jobs/{country}/search"
+        params: Dict[str, Any] = {}
         data: Optional[Dict[str, Any]] = None
         # Adzuna ANDs every word, so an over-specific query returns nothing: widen step by step.
         for what in dict.fromkeys([" ".join(words), " ".join(words[:3]), " ".join(words[:2])]):
             if not what:
                 continue
-            params: Dict[str, Any] = {"app_id": settings.ADZUNA_APP_ID, "app_key": settings.ADZUNA_APP_KEY,
-                                      "results_per_page": min(50, limits["per_source"]), "what": what,
-                                      "content-type": "application/json"}
+            params = {"app_id": settings.ADZUNA_APP_ID, "app_key": settings.ADZUNA_APP_KEY,
+                      "results_per_page": per_page, "what": what, "content-type": "application/json"}
             if where:
                 params["where"] = where
             if plan["filters"].get("recency_days"):
                 params["max_days_old"] = plan["filters"]["recency_days"]
-            data = await http.json("GET", f"https://api.adzuna.com/v1/api/jobs/{country}/search/1", params=params,
-                                   cache_ttl=1800)
+            data = await http.json("GET", f"{base}/1", params=params, cache_ttl=1800)
             if len((data or {}).get("results", [])) >= 10:
                 break
+        results = list((data or {}).get("results", []))
+        for page in range(2, limits["adzuna_pages"] + 1):  # Deep reads the next page of listings too
+            if len(results) < per_page * (page - 1):
+                break
+            more = await http.json("GET", f"{base}/{page}", params=params, cache_ttl=1800)
+            results += (more or {}).get("results", [])
         currency = plan["search"]["currency"].get(country, "")
         rows = []
-        for job in (data or {}).get("results", []):
+        for job in results:
             low, high = job.get("salary_min"), job.get("salary_max")
             salary = None
             if low or high:
