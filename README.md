@@ -1,230 +1,150 @@
-# Magpie - You ask, it collects
+# Magpie — Ask in your own words. Get research-ready data.
 
-An AI-powered data intelligence platform that turns a plain-language business requirement into a clean,
-structured, source-backed dataset, through a workflow the AI designs and runs on its own.
+Magpie is an AI-powered data research tool that turns a plain-language request into a structured dataset with links back to its sources. Describe what you are looking for, choose a market and a search depth, and Magpie plans and runs a suitable research workflow.
 
-| | Link |
-| --- | --- |
-| **Live app** | [magpie-lake-iota.vercel.app](https://magpie-lake-iota.vercel.app/) |
-| **Backend (health check)** | [magpie-9pln.onrender.com](https://magpie-9pln.onrender.com) |
-| **Source code** | [github.com/23110572-hash/Magpie](https://github.com/23110572-hash/Magpie) |
+You can write naturally—even with spelling mistakes, informal wording, or Hinglish. You do not need to configure a separate scraper for every kind of search.
 
-> The backend runs on a free plan and sleeps when idle: the first request after a quiet period can take about
-> a minute while it wakes up.
+> **Example**
+>
+> **You ask:** `mujhe chandigarh mein web developer chahiye`
+>
+> **Magpie understands:** Web developers in Chandigarh, India
+>
+> **You get:** A structured list of results, with available contact details and links to the sources behind them.
 
----
+The numbers returned depend on the request and sources available; the example above illustrates the workflow rather than promising a fixed result count.
 
-## 1. Problem statement
+## Try Magpie
 
-### AI-Powered Data Intelligence Platform
+- **Live app:** https://magpie-lake-iota.vercel.app
+- **Backend health check:** https://magpie-9pln.onrender.com
+- **Source code:** https://github.com/23110572-hash/Magpie
 
-Businesses often need to collect specific information from the web, such as job openings, sales leads, sponsor
-opportunities, market data, or other business-relevant information. However, building separate scrapers and
-workflows for every requirement is time-consuming, difficult to maintain, and not scalable.
+The backend currently uses a free hosting plan and may sleep when idle. The first request after a quiet period can take about a minute while the service wakes up.
 
-The challenge is to build an AI-powered data intelligence platform where users can describe what they need in plain
-English. The AI should understand the request, dynamically create and execute an appropriate data-collection
-workflow, gather information from permitted sources, process and validate the data, and present the results through
-a centralized dashboard.
+## Built with Kiro
 
-The platform should also allow users to manage collection tasks, monitor their progress, explore results, inspect
-sources, revisit previous workflows, and export datasets.
+Magpie is a project built with help from **Kiro**. I used Kiro during development to research approaches, explore implementation options, work through problems, and iterate on an AI-powered application. The project is also an opportunity to share a practical example of what can be built with AI-assisted development and to contribute to the open-source developer community.
 
-**Goal** - build a prompt-based AI Data Intelligence Platform that can:
+## What can you use Magpie for?
 
-- Understand data requirements from natural-language prompts.
-- Collect and process information from multiple permitted sources.
-- Provide source-backed, traceable data.
-- Present results through an interactive dashboard.
-- Allow users to search, filter, and export collected data.
+Magpie's workflow can adapt to different research requests, including:
 
-**Expected outcome**
+- Finding people or professionals to contact
+- Discovering job openings
+- Researching local businesses and agencies
+- Finding companies, startups, and potential sponsors
+- Exploring events, news, and market information
 
-- Dynamically design and execute data-collection workflows.
-- Clean, structure, validate, and deduplicate results.
-- Allow users to monitor and manage collection tasks.
-- Maintain workflow and dataset history.
+Rather than relying on a fixed list of cities, job titles, or keywords, Magpie uses an AI planner to interpret each request and decide what information to look for, which sources to check, and which fields will be useful in the final dataset.
 
-A complete product that turns a natural-language business requirement into a clean, structured, source-backed
-dataset with a managed end-to-end workflow.
+## Features
 
----
+- **Plain-language input:** Describe the result you need in your own words, including informal language and Hinglish.
+- **Market selection:** Choose India, the United States, or the European Union.
+- **Three research depths:** Use Fast, Balanced, or Deep mode depending on how broad a search you need.
+- **Live workflow progress:** Follow the search as Magpie interprets the request, reviews pages, checks relevance, merges duplicates, looks for public contact details, and saves results. A running search can be cancelled.
+- **Visible interpretation:** Review how Magpie understood your request and choose an alternative interpretation when the intent needs correcting.
+- **Flexible datasets:** Magpie selects relevant columns for the request. Explore results in table or card view, search and filter them, and export data as CSV, JSON, or PDF.
+- **Source traceability:** Review each result's source URL, collection time, match reason, other places it appeared, and saved source snapshot.
+- **Careful contact handling:** Email addresses and phone numbers are retained only when they are found in the source, rather than being guessed by the model.
+- **Saved research history:** Reopen, rerun, or delete previous workflows and datasets.
+- **Lead and outreach workflow:** Turn selected records into leads and generate a personalised outreach email draft.
+- **Private user workspaces:** Signed-in users can access their own workflows, datasets, and leads.
 
-## 2. Our solution
+## How it works
 
-Magpie has one input: a prompt box. The user types what they need in their own words (spelling mistakes, broken
-grammar and Hinglish are all fine), picks a market (India, United States or European Union) and a depth
-(Fast, Balanced, Deep). Magpie does the rest:
+Each request goes through the same broad workflow. The AI helps plan and interpret the research; application logic handles validation, storage, and traceability.
 
-```
-You type:        "mujhe chandigarh mein web developer chahiye"
-Magpie reads:    "I need a web developer in Chandigarh"
-Understood as:   Web developers (people) in Chandigarh, India
-You get:         38 verified rows, 9 with an e-mail, each linked to its source and raw snapshot
-```
+1. **Understand the request** — Interpret the prompt, identify the requested result type and location, choose useful dataset fields, and prepare search queries.
+2. **Find sources** — Search relevant discovery tools and structured sources for the selected market.
+3. **Read useful pages** — Decide which results are worth inspecting and extract relevant entries from suitable pages or directories.
+4. **Check relevance** — Compare each candidate against the original request and record a relevance score and explanation.
+5. **Merge duplicates** — Combine repeated references to the same person, company, or business where matching information is available.
+6. **Look for public contacts** — Check relevant websites and contact pages for published email addresses and phone numbers.
+7. **Save the dataset** — Store the result with source information and calculate the available contact coverage.
 
-There is no scraper per use case and no hardcoded list of cities, job titles or keywords. A large language model
-acts as the brain: for every request it decides **what** to collect, **where** to look, **how** to read what it
-finds and **what counts as a good result**. The same engine handles people to hire, job openings, local
-businesses, companies, sponsors, events, news and market data.
+### Research depth
 
-**What the user gets**
+The modes control how much discovery and review Magpie attempts. Search sizes and timings are approximate and can vary with the request and source availability.
 
-- **Live workflow tracking** - a step-by-step progress bar (Understood, Searching, Reading pages, AI relevance check,
-  Duplicates merged, Finding contacts, Saved) with a live percentage and time estimate. Runs can be cancelled.
-- **"Understood as" with one-click correction** - the dashboard shows how the AI read the request and offers
-  alternative readings (e.g. "search jobs instead of people") that re-run the workflow with one click.
-- **Clean datasets** - every dataset gets columns chosen for that request (e.g. *skills, experience, portfolio* for
-  developers; *services, rating* for agencies), a table and card view, search and filters, and CSV / JSON / PDF export.
-- **Full provenance** - every row keeps its source link, collection time, why it matched, where else it was seen,
-  and the exact raw data it was built from.
-- **Honest contact coverage** - "Out of 79 rows, 29 have an e-mail and 36 have a phone number". Contacts are only
-  kept when they are actually published by the source; nothing is guessed.
-- **History and outreach** - every workflow and dataset is kept per user; runs can be re-opened, re-run or deleted.
-  Selected rows become leads, and the AI drafts a personalised outreach e-mail.
-- **Private workspaces** - real accounts; each user only sees their own workflows, datasets and leads.
-- **Credits** - every new account gets 10 free credits once, at sign-up. A search costs 1 credit in Fast,
-  2 in Balanced and 4 in Deep mode (a re-run is charged again). More credits are added instantly on the Credits
-  page: 10 credits for ₹50, 100 for ₹500 or 500 for ₹2,500. Credits are refunded only when a search fails (a timeout,
-  an error or a server restart); cancelled searches and searches with no results are not refunded.
-
----
-
-## 3. How we solve it
-
-Every request runs through the same seven-step workflow. The AI makes the decisions; the code enforces safety,
-validation and traceability.
-
-| Step | What happens |
-| --- | --- |
-| **1. Understand** | The AI rewrites the request in clear English, classifies what is wanted (people, jobs, companies, local businesses, events, news, market data), finds the place (city, region, country and its alternative spellings), lists synonyms that a relevant result must mention, chooses the dataset columns, writes the search queries and picks the sources. |
-| **2. Search** | The chosen sources are queried in parallel, targeted to the selected market: Google web, Google Maps and Google News, Tavily AI search, GitHub developer profiles, the Adzuna job index, official company job boards (Greenhouse, Lever, Ashby), Remotive, Arbeitnow, Hacker News and Wikipedia. |
-| **3. Read** | The AI looks at the web results and decides which ones are a single result, which are lists or directories worth reading, and which to skip. Magpie fetches the lists (respecting robots.txt) and the AI extracts every entry into the dataset columns. |
-| **4. Check** | Every candidate is judged by the AI against the original request: right kind of thing, right place, filters satisfied. Each kept row gets a 0-100 score and a short reason. |
-| **5. Merge** | The same person or business found through different sources becomes one richer row (matched by link, e-mail, phone, website, profile or name + organisation + place). |
-| **6. Find contacts** | For the best rows, Magpie visits the result's own website and contact page and keeps only e-mails and phone numbers that are published there. |
-| **7. Store** | Rows are saved with their source URL, timestamp and raw snapshot, and the contact coverage is calculated. |
-
-**How deep each mode goes**
-
-| | Fast | Balanced | Deep |
-| --- | --- | --- | --- |
+| Setting | Fast | Balanced | Deep |
+| --- | ---: | ---: | ---: |
 | Credits per search | 1 | 2 | 4 |
-| Google searches | 2 | 4 | 8 |
-| Results per Google search | 10 | 10 | 20 (2 pages) |
+| Google web searches | 2 | 4 | 8 |
+| Results per Google search | 10 | 10 | 20 (up to 2 pages) |
 | Tavily searches | 1 | 2 | 4 |
-| Google Maps searches | 1 | 2 | 4 x 2 pages |
+| Google Maps searches | 1 | 2 | 4 × 2 pages |
 | Cities covered for country-wide requests | 2 | 4 | 8 |
-| Web results the AI reviews | 30 | 60 | 160 |
-| List pages read | 3 | 8 | 20 + next page of the best lists |
+| Web results reviewed by AI | 30 | 60 | 160 |
+| List pages read | 3 | 8 | 20, plus the next page of the best lists |
 | GitHub profiles | 15 | 30 | 90 |
-| Adzuna jobs | 40 | 50 | 100 |
-| Results checked by the AI | 120 | 250 | 600 |
+| Adzuna job results | 40 | 50 | 100 |
+| Candidates checked for relevance | 120 | 250 | 600 |
 | Websites checked for contacts | 12 | 30 | 80 |
-| Expected time | ~40 s | ~1.5 min | ~3-4 min |
+| Typical expected time | ~40 seconds | ~1.5 minutes | ~3–4 minutes |
 
-**Principles we hold to**
+## Data sources and responsible collection
 
-- **No invented data.** URLs, e-mails and phone numbers suggested by the AI are only kept if they literally appear
-  in the source. Placeholder values (e.g. `555 1234567`) are dropped.
-- **Permitted sources only.** Official APIs and public pages; robots.txt is always respected, and sites whose terms
-  forbid scraping (LinkedIn, Naukri, Instagram, Facebook and similar) are never fetched. Their public search-result
-  listings can still appear as a lead, with the link.
-- **Traceable by design.** Provenance is stored with the row, not reconstructed later.
-- **Graceful degradation.** If one source or page fails, the workflow carries on and reports it.
+Depending on the request, Magpie can use sources and integrations such as Google web search, Google Maps, Google News, Tavily, GitHub, Adzuna, Greenhouse, Lever, Ashby, Remotive, Arbeitnow, Hacker News, and Wikipedia.
 
----
+Magpie is designed around a few important principles:
 
-## 4. Architecture
+- **Do not invent data.** Contact details and URLs must be present in the source to be retained; placeholder values are removed.
+- **Respect access rules.** The workflow is intended to use permitted public pages and official APIs, respects `robots.txt`, and avoids fetching sites whose terms prohibit scraping.
+- **Keep sources attached to results.** Source information is stored with the record so users can check where it came from.
+- **Handle failures gracefully.** If one source or page fails, the workflow can continue with other available results and report the issue.
 
-```mermaid
-flowchart LR
-  U["User types a request<br/>market + depth"] --> D["Magpie dashboard"]
-  D --> P["1 Understand<br/>AI planner"]
-  P --> S["2 Search<br/>sources in parallel"]
-  S --> R["3 Read<br/>AI triage + page reading"]
-  R --> C["4 Check<br/>AI relevance judge"]
-  C --> M["5 Merge<br/>duplicates"]
-  M --> K["6 Find contacts<br/>published e-mails / phones"]
-  K --> DB[("7 Store<br/>rows + source + snapshot")]
-  DB --> D
-  AI{{"LLM brain<br/>Llama 3.3 70B"}} -.-> P
-  AI -.-> R
-  AI -.-> C
-  S -. live progress .-> D
-```
+Please use Magpie responsibly and check the relevant source terms and applicable laws when collecting or using data.
 
-**Building blocks**
+## Technology stack
 
-| Layer | Technology | Role |
+| Component | Technologies | Purpose |
 | --- | --- | --- |
-| Dashboard | React, TypeScript, Tailwind CSS | Prompt bar with market and depth, live progress tracker, datasets (table / cards), leads, history, credits, settings |
-| Workflow engine | Python, FastAPI, asyncio | Runs the seven steps in parallel and streams progress to the dashboard |
-| AI brain | Meta Llama 3.3 70B via OpenRouter | Planning, page triage, extraction, relevance checking, outreach drafts |
-| Web discovery | Serper (Google web, Maps, News), Tavily | Finding lists, directories, profiles and businesses in the chosen market |
-| Structured sources | GitHub, Adzuna, Greenhouse, Lever, Ashby, Remotive, Arbeitnow, Hacker News, Wikipedia | Developer profiles, job listings, company and topic data |
-| Storage | Neon (serverless PostgreSQL) | Users, workflows, datasets, records with raw snapshots, leads |
+| Frontend | React, TypeScript, Tailwind CSS | Prompt input, progress display, datasets, leads, history, credits, and settings |
+| Backend | Python, FastAPI, `asyncio` | Runs the research workflow and streams progress to the frontend |
+| AI model | Meta Llama 3.3 70B via OpenRouter | Planning, page selection, extraction, relevance checks, and outreach drafts |
+| Web discovery | Serper, Tavily | Finds pages, directories, profiles, and businesses |
+| Structured sources | GitHub, Adzuna, Greenhouse, Lever, Ashby, Remotive, Arbeitnow, Hacker News, Wikipedia | Supplies developer, job, company, and topic information |
+| Database | Neon serverless PostgreSQL | Stores users, workflows, datasets, records, source snapshots, and leads |
 
-**Data model**
+At a high level, the data model connects a user to workflow runs, datasets, individual source-backed records, and leads created from selected records.
 
-```
-User ──< Workflow run ──< Dataset ──< Record (source URL · timestamp · raw snapshot · score · reason)
-  └──< Lead (from selected records, with outreach status)
-```
+## Example end-to-end checks
 
----
+The following examples were tested against live sources using the India market in Balanced mode. Results are examples from those runs, not guaranteed counts for future searches.
 
-## 5. How Magpie meets the problem statement
+| Prompt | Interpreted request | Records returned | With email | With phone |
+| --- | --- | ---: | ---: | ---: |
+| `i need devloper in chandigarh` | Web developers in Chandigarh, India | 34 | 16 | 1 |
+| `i want a graphic desinger search all designer from india` | Graphic designers in India | 35 | 0 | 0 |
+| `mujhe chandigarh mein web developer chahiye` | Web developers in Chandigarh, India | 38 | 9 | 1 |
+| `react js jobs in bangalore for freshers` | React JS jobs for freshers in Bangalore, India | 25 | 0 | 0 |
+| `digital marketing agencies in mumbai with emails` | Digital marketing agencies in Mumbai, India | 79 | 29 | 36 |
+| `sponsors for college tech fest in delhi` | Sponsors for a college tech fest in Delhi, India | 20 | 0 | 2 |
+| `top fintech startups in india` | Fintech startups in India | 74 | 16 | 0 |
 
-| Requirement | How Magpie delivers it |
-| --- | --- |
-| Understand data requirements from natural-language prompts | The AI planner reads any wording, fixes spelling, translates mixed languages, and shows its interpretation ("Understood as", "Did you mean") with alternative readings |
-| Collect and process information from multiple permitted sources | 12 source types queried in parallel per request, chosen by the AI, targeted to the selected market; robots.txt and site terms respected |
-| Provide source-backed, traceable data | Every row stores its source link, collection time, matching reason, other places it was seen and the raw snapshot, viewable from the dashboard |
-| Present results through an interactive dashboard | Home (prompt + live tracker), Datasets (table / cards, coverage bars), Leads, History, Credits, Settings |
-| Search, filter and export collected data | Full-text search, source / has-e-mail / has-phone filters, CSV, JSON and PDF export |
-| Dynamically design and execute data-collection workflows | A new plan (queries, sources, columns, filters) is generated for every request; nothing is hardcoded per use case |
-| Clean, structure, validate and deduplicate results | Field cleaning, AI relevance scoring against the request, placeholder and fake-contact filtering, cross-source merging |
-| Monitor and manage collection tasks | Step-by-step live progress with ETA, cancel, re-run (also with a different interpretation), delete |
-| Maintain workflow and dataset history | Every workflow keeps its prompt, plan, statistics and dataset per user; any run can be reopened or repeated |
+In these runs, all seven prompts were interpreted with the intended type of result and location, including the misspelled and Hinglish prompts. Every saved row included a source link and raw snapshot.
 
----
+The project has also been checked for core flows including authentication, user-level data separation, CSV and JSON export, progress streaming, lead creation, AI-drafted outreach, and account-data deletion.
 
-## 6. Test results
+## Contributing
 
-All tests were run end to end against live sources, with the **India** market in **Balanced** mode. Prompts were
-typed the way a real user would type them, including spelling mistakes and Hinglish.
+Magpie is intended to be useful to developers who want to explore, improve, and extend AI-driven data research workflows. Contributions that improve usability, source handling, validation, traceability, reliability, or documentation are especially welcome.
 
-**Understanding and collection**
+A useful contribution process is:
 
-| # | Prompt (as typed) | Understood as | Type | Rows | With e-mail | With phone | Time |
-| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
-| 1 | i need devloper in chandigarh | Web developers in Chandigarh, India | People | 34 | 16 | 1 | 85 s |
-| 2 | i want a graphic desinger search all designer from india | Graphic designers in India | People | 35 | 0 | 0 | 118 s |
-| 3 | mujhe chandigarh mein web developer chahiye | Web developers in Chandigarh, India | People | 38 | 9 | 1 | 101 s |
-| 4 | react js jobs in bangalore for freshers | React JS jobs for freshers in Bangalore, India | Jobs | 25 | 0 | 0 | 101 s |
-| 5 | digital marketing agencies in mumbai with emails | Digital marketing agencies in Mumbai, India | Local businesses | 79 | 29 | 36 | 119 s |
-| 6 | sponsors for college tech fest in delhi | Sponsors for college tech fest in Delhi, India | Companies | 20 | 0 | 2 | 78 s |
-| 7 | top fintech startups in india | Fintech startups in India | Companies | 74 | 16 | 0 | 98 s |
+1. Review the existing implementation before changing a workflow.
+2. Keep results traceable and avoid adding guessed contact details.
+3. Test changes against a variety of prompts, including misspellings and mixed-language input.
+4. Describe what changed and include reproduction steps or test results in your pull request.
 
-- All 7 requests were interpreted correctly, including the misspelled and the Hinglish ones, with the right intent
-  and place.
-- Every row carries a source link and a raw snapshot.
-- Contact coverage follows what sources actually publish: agencies list e-mails and phones on their websites
-  (37% / 46%), while designers found through public profile listings publish none. We report this instead of guessing.
-- AI cost per run was between $0.014 and $0.045.
+Please open an issue to discuss a larger change before investing in a substantial implementation.
 
-**Platform checks**
+## Running locally
 
-| Check | Result |
-| --- | --- |
-| Sign up, sign in, wrong password and duplicate e-mail rejected | Pass |
-| Requests without a signed-in session rejected | Pass |
-| Another user cannot see, read or delete someone else's workflows, datasets or records | Pass |
-| Raw snapshot available for every record | Pass |
-| CSV and JSON export | Pass |
-| Live progress stream sends the final state and closes for finished workflows | Pass |
-| Dataset rows turned into leads, re-adding the same rows skipped | Pass |
-| AI-drafted outreach e-mail | Pass |
-| Real outreach e-mail delivered to our own inbox, second send blocked | Pass |
-| Deleting an account removes all of its data and ends its session | Pass |
+The application uses separate frontend and backend components and relies on external services. Check the repository's current source and configuration files for the exact install commands, required environment variables, and provider credentials; those setup details are not included in the project notes used to write this README.
+
+## License
+
+This README describes Magpie as an intended open-source project, but the supplied project notes did not specify a license. Add a `LICENSE` file to the repository before others rely on permissions to use, modify, or redistribute the code.
